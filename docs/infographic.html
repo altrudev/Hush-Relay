@@ -1,0 +1,82 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Hush Relay infographic</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1200px;height:1500px;background:#0f1217;color:#e6e8eb;font-family:Inter,sans-serif;padding:72px 80px;display:flex;flex-direction:column}
+.kicker{font:600 22px Inter;letter-spacing:4px;text-transform:uppercase;color:#4fa58c}
+h1{font:800 76px/1.02 "Inter Display",Inter;letter-spacing:-2px;margin:18px 0 18px}
+h1 span{color:#4fa58c}
+.lede{font:400 28px/1.4 Inter;color:#aab2bf;max-width:980px}
+.flow{display:grid;grid-template-columns:1fr 64px 1fr 64px 1fr;align-items:stretch;margin:56px 0 18px}
+.card{background:#171b22;border:2px solid #2a303a;border-radius:10px;padding:26px 24px}
+.card.mid{border-color:#4fa58c}
+.card .who{font:700 15px Inter;letter-spacing:2.5px;text-transform:uppercase;color:#8b93a1}
+.card .what{font:700 30px/1.15 "Inter Display",Inter;margin:12px 0 10px}
+.card p{font:400 20px/1.4 Inter;color:#aab2bf}
+.arrow{display:flex;align-items:center;justify-content:center}
+.arrow svg{width:48px}
+.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:22px}
+.step{border-top:3px solid #4fa58c;padding-top:14px}
+.step b{font:800 34px "Inter Display";color:#4fa58c;display:block}
+.step span{font:500 19px/1.35 Inter;color:#cfd4db}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:52px}
+.box{background:#171b22;border-radius:10px;padding:28px 30px;border-left:6px solid #4fa58c}
+.box.warn{border-left-color:#e0915a}
+.box h3{font:700 26px "Inter Display",Inter;margin-bottom:14px}
+.box li{list-style:none;font:400 21px/1.45 Inter;color:#cfd4db;padding-left:30px;position:relative;margin:7px 0}
+.box li:before{content:"";position:absolute;left:4px;top:13px;width:12px;height:12px;border-radius:2px;background:#4fa58c}
+.box.warn li:before{background:#e0915a}
+.host{margin-top:44px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+.host .lbl{font:600 20px Inter;color:#8b93a1;margin-right:6px}
+.chip{font:600 20px Inter;padding:10px 18px;border:2px solid #2a303a;border-radius:6px;color:#e6e8eb}
+.chip.hi{border-color:#4fa58c;color:#4fa58c}
+.foot{margin-top:auto;display:flex;justify-content:space-between;align-items:flex-end;border-top:2px solid #2a303a;padding-top:28px}
+.repo{font:700 34px "DejaVu Sans Mono",monospace;color:#e6e8eb}
+.repo small{display:block;font:500 19px Inter;color:#8b93a1;margin-bottom:8px}
+.brand{text-align:right;font:700 24px Inter;color:#4fa58c}
+.brand small{display:block;font:500 18px Inter;color:#8b93a1;margin-top:6px}
+.badge{align-self:flex-start;margin-top:22px;font:600 19px Inter;color:#e0915a;border:2px solid #e0915a;border-radius:6px;padding:8px 14px}
+</style></head><body>
+<div class="kicker">Open source · AGPL-3.0</div>
+<h1>Private messaging you can run on a <span>spare phone.</span></h1>
+<p class="lede">Hush Relay is an end-to-end encrypted messenger with no accounts, no phone numbers and no app store. The server is one PHP file that only ever holds sealed envelopes.</p>
+<div class="badge">Experimental: not yet independently audited</div>
+
+<div class="flow">
+  <div class="card"><div class="who">Sender's device</div><div class="what">Locks it</div><p>Double Ratchet encryption. A new key for every message.</p></div>
+  <div class="arrow"><svg viewBox="0 0 48 24"><path d="M2 12h40m-10-9 10 9-10 9" fill="none" stroke="#4fa58c" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+  <div class="card mid"><div class="who">Relay (your phone)</div><div class="what">Holds it</div><p>Sees a mailbox number and a sealed blob. Not the words. Not the sender.</p></div>
+  <div class="arrow"><svg viewBox="0 0 48 24"><path d="M2 12h40m-10-9 10 9-10 9" fill="none" stroke="#4fa58c" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+  <div class="card"><div class="who">Recipient, anywhere</div><div class="what">Unlocks it</div><p>Picks it up live in under a second, then the relay deletes it.</p></div>
+</div>
+<div class="steps">
+  <div class="step"><b>01</b><span>Add a contact by scanning a QR invite</span></div>
+  <div class="step"><b>02</b><span>Compare safety numbers once</span></div>
+  <div class="step"><b>03</b><span>Messages wait up to 14 days if you're offline</span></div>
+  <div class="step"><b>04</b><span>6 recovery words bring your account back</span></div>
+</div>
+
+<div class="cols">
+  <div class="box"><h3>Protected</h3><ul>
+    <li>Message content, end to end</li>
+    <li>Who sent each message (sealed sender)</li>
+    <li>Past messages if a device is stolen</li>
+    <li>Exact message length (padded)</li>
+  </ul></div>
+  <div class="box warn"><h3>Still visible to the relay host</h3><ul>
+    <li>IP addresses and timing</li>
+    <li>Which mailbox received mail</li>
+    <li>Roughly how big each message is</li>
+    <li>Whether the relay is up at all</li>
+  </ul></div>
+</div>
+
+<div class="host"><span class="lbl">Runs on</span>
+  <span class="chip hi">Android phone</span><span class="chip">$5 VPS</span><span class="chip">Raspberry Pi</span><span class="chip">Shared hosting</span><span class="chip">App on IPFS</span>
+</div>
+
+<div class="foot">
+  <div class="repo"><small>Code, setup guide and tests</small>github.com/altrudev/hush-relay</div>
+  <div class="brand">ALTRU.dev<small>Code for Humanity</small></div>
+</div>
+</body></html>

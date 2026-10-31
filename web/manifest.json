@@ -1,0 +1,10 @@
+{
+  "name": "Hush Relay",
+  "short_name": "Hush",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0f1217",
+  "theme_color": "#14181f",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
