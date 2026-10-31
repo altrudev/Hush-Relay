@@ -78,6 +78,16 @@ docs/
   SELF-HOSTING.md  PROTOCOL.md
 ```
 
+## Documentation
+
+- [Project overview, scope and status](ABOUT.md)
+- [Protocol and threat assumptions](docs/PROTOCOL.md)
+- [Self-hosting and deployment](docs/SELF-HOSTING.md)
+- [Security limitations and vulnerability reporting](SECURITY.md)
+- [Contributing and local test procedure](CONTRIBUTING.md)
+- [Third-party attribution and licensing](LICENSES.md)
+- [Release history](CHANGELOG.md)
+
 ## Tests
 
 ```bash
@@ -99,10 +109,10 @@ Issues and pull requests are welcome, especially security review. Please report 
 
 ## License
 
-Copyright © 2026 Valentyn Rukhaylo ([ALTRU.dev](https://altru.dev)) and contributors.
+Copyright © 2026 Valentyn Rukhaylo (ALTRU.dev) and contributors.
 
-Hush Relay is free software under the [GNU Affero General Public License v3.0 or later](LICENSE). If you run a modified version for others (including as a hosted relay or app), you must offer them your changed source code.
+Original Hush Relay code and documentation are licensed under the **GNU Affero General Public License v3.0 or later** (SPDX: `AGPL-3.0-or-later`). The complete license is in [LICENSE](LICENSE). For hosted modified versions, AGPL section 13 may require providing the corresponding source to network users; see [LICENSES.md](LICENSES.md) for an overview. AGPL permits commercial use provided its terms are followed.
 
-Bundled third-party code keeps its own license: [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) (MIT), [jsQR](https://github.com/cozmo/jsQR) (Apache-2.0, see `web/vendor/LICENSE-jsQR.txt`), BIP39 English wordlist via [@scure/bip39](https://github.com/paulmillr/scure-bip39) (MIT, see `web/vendor/LICENSE-bip39-wordlist.txt`).
+Vendored components remain under their respective MIT or Apache-2.0 terms, detailed in [LICENSES.md](LICENSES.md) and the accompanying notice files. No trademark rights or separate proprietary license are granted by this repository.
 
-Made by [ALTRU.dev](https://altru.dev), Code for Humanity.
+Developed and maintained by [Val Rukhaylo / ALTRU.dev](https://altru.dev).
