@@ -1,0 +1,7 @@
+data/
+web/data/
+web/relay.config.php
+node_modules/
+__pycache__/
+*.hush
+.DS_Store

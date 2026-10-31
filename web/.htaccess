@@ -1,0 +1,10 @@
+# Apache / cPanel: forbid framing by other sites, keep the data folder private.
+<IfModule mod_headers.c>
+  Header always set Content-Security-Policy "frame-ancestors 'none'"
+  Header always set X-Frame-Options "DENY"
+  Header always set Referrer-Policy "no-referrer"
+</IfModule>
+<IfModule mod_autoindex.c>
+  Options -Indexes
+</IfModule>
+RedirectMatch 404 ^.*/(data|relay\.config\.php)(/.*)?$
