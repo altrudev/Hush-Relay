@@ -369,6 +369,7 @@ if (typeof document !== 'undefined') (() => {
 
   // What a relay supports. Older (PHP) relays don't know "info": treat them as open, no calls.
   async function relayInfo(url) {
+    if (!isRelay(url)) return { ok: false, invite: false, calls: false };
     try {
       const r = await fetch(url + '?a=info', { method: 'POST', headers: TP, body: '{}' });
       if (!r.ok) return { ok: r.status === 400, invite: false, calls: false };
