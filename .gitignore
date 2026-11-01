@@ -5,3 +5,5 @@ node_modules/
 __pycache__/
 *.hush
 .DS_Store
+android/build/
+android/out/

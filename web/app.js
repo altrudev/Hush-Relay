@@ -339,7 +339,15 @@ if (typeof document !== 'undefined') (() => {
     const m = String(text).match(new RegExp('#' + key + '=([A-Za-z0-9_-]+)'));
     return m ? JSON.parse(dec.decode(b64d(m[1]))) : null;
   };
-  const defaultRelay = () => (window.HUSH_CONFIG && window.HUSH_CONFIG.relay) || new URL('relay.php', location.href).href;
+  // Inside the Android app the page has no relay next to it, and links must point at a
+  // web copy of the app people can open: the one your relay serves.
+  const AND = window.HushAndroid || null;
+  const defaultRelay = () => (window.HUSH_CONFIG && window.HUSH_CONFIG.relay) || (AND ? '' : new URL('relay.php', location.href).href);
+  const linkBase = relay => AND ? String(relay).replace(/[?#].*$/, '').replace(/[^/]*$/, '') : location.origin + location.pathname;
+  async function copyText(text) {
+    if (AND) { AND.copy(text); return; }
+    await navigator.clipboard.writeText(text);
+  }
   const COLORS = ['#0e7a68', '#2f6db3', '#8a4fbf', '#c2410c', '#0f766e', '#b4235a', '#4d7c0f', '#6b5b95', '#9a6b00', '#1d6f8a'];
   function paintAvatar(el, name, key) {
     const words = String(name || '?').trim().split(/\s+/);
@@ -451,7 +459,7 @@ if (typeof document !== 'undefined') (() => {
   function inviteLink() {
     const o = { p: me.pub, b: me.box, r: me.relay, n: me.name, k: me.inviteTok };
     if (me.join) o.j = me.join;
-    return location.origin + location.pathname + '#i=' + b64e(enc.encode(JSON.stringify(o)));
+    return linkBase(me.relay) + '#i=' + b64e(enc.encode(JSON.stringify(o)));
   }
   function readInvite(text) {
     const o = parseHashData(text, 'i');
@@ -855,7 +863,7 @@ if (typeof document !== 'undefined') (() => {
     const kp = await genKP(), secret = hex(rand(32)), box = (await sha(secret)).slice(0, 32);
     // The temporary mailbox secret travels in the code so the old phone can admit it on an
     // invite-only relay. It only unlocks a sealed envelope that needs this device's key.
-    const url = location.origin + location.pathname + '#link=' + b64e(enc.encode(JSON.stringify({ r: relay, e: kp.pub, s: secret })));
+    const url = linkBase(relay) + '#link=' + b64e(enc.encode(JSON.stringify({ r: relay, e: kp.pub, s: secret })));
     const my = pairing = { kp, until: Date.now() + 10 * 60000 };
     show('vPair', 'Move your profile');
     $('#back').hidden = true;
@@ -886,7 +894,7 @@ if (typeof document !== 'undefined') (() => {
     if (pairing === my) { pairing = null; alert('This move code expired. Start again.'); show('vSetup'); }
   };
   $('#pairCancel').onclick = () => { pairing = null; show('vSetup'); };
-  $('#pairCopy').onclick = async () => { try { await navigator.clipboard.writeText($('#pairLink').value); toast('Copied'); } catch { $('#pairLink').select(); } };
+  $('#pairCopy').onclick = async () => { try { await copyText($('#pairLink').value); toast('Copied'); } catch { $('#pairLink').select(); } };
 
   // Old device: approve, send the profile, wait for the new device to confirm, then sign out.
   let pendingLink = null;
@@ -967,8 +975,8 @@ if (typeof document !== 'undefined') (() => {
   }
   $('#inviteBtn').onclick = openInvite;
   $('#settingsInviteBtn').onclick = openInvite;
-  $('#copyBtn').onclick = async () => { try { await navigator.clipboard.writeText($('#inviteLink').value); toast('Invite link copied'); } catch { $('#inviteLink').select(); } };
-  $('#shareBtn').onclick = () => navigator.share
+  $('#copyBtn').onclick = async () => { try { await copyText($('#inviteLink').value); toast('Invite link copied'); } catch { $('#inviteLink').select(); } };
+  $('#shareBtn').onclick = () => AND ? AND.share('Here\'s my private chat invite: ' + $('#inviteLink').value) : navigator.share
     ? navigator.share({ title: 'Chat with me on Hush Relay', text: 'Here\'s my private chat invite:', url: $('#inviteLink').value }).catch(() => {})
     : $('#copyBtn').click();
   $('#addLinkBtn').onclick = () => { show('vAdd', 'Add a contact'); $('#addIn').value = ''; };
@@ -1010,9 +1018,11 @@ if (typeof document !== 'undefined') (() => {
     toast('Encrypting backup…', 0);
     try {
       const text = await exportBackup(me, [...contacts.values()], p1);
+      const fname = 'hush-backup-' + new Date().toISOString().slice(0, 10) + '.hush';
+      if (AND) { AND.saveFile(fname, text); $('#bp1').value = $('#bp2').value = ''; toast(''); return; }
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([text], { type: 'application/octet-stream' }));
-      a.download = 'hush-backup-' + new Date().toISOString().slice(0, 10) + '.hush';
+      a.download = fname;
       document.body.append(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 10000);
       $('#bp1').value = $('#bp2').value = '';
@@ -1037,6 +1047,30 @@ if (typeof document !== 'undefined') (() => {
     document.body.dataset.setup = 'ready';
   }
   $('#relayIn').onchange = prepareSetup;
+  // Opened from an invite (or pasted one) before having a profile: create one, then
+  // the inviter is added automatically. With no relay of our own yet, use theirs.
+  function setupInvite(text) {
+    try {
+      const o = readInvite(text);
+      pendingInvite = Object.assign({ raw: text }, o);
+      paintAvatar($('#invitedAvatar'), o.n, o.p);
+      $('#invitedName').textContent = String(o.n || 'Someone').slice(0, 40);
+      $('#invitedBy').hidden = false; $('#pasteInviteWrap').hidden = true;
+      if (!$('#relayIn').value.trim() && isRelay(o.r)) $('#relayIn').value = o.r;
+      return true;
+    } catch { return false; }
+  }
+  $('#pasteInviteIn').oninput = () => {
+    const t = $('#pasteInviteIn').value.trim();
+    if (/#i=/.test(t)) { if (setupInvite(t)) prepareSetup(); else toast('That invite link looks damaged'); }
+  };
+  // The Android app hands over links shared to it or opened with it.
+  window.hushOpen = text => {
+    text = String(text || '');
+    if (me) return handleCode(text).catch(e => alert(e.message));
+    if (/#i=/.test(text) && setupInvite(text)) prepareSetup();
+    else if (/#link=/.test(text)) alert('This is a request to move a profile onto a new device. Open it (or scan it) on the device that already has your profile.');
+  };
   $('#createBtn').onclick = async () => {
     const name = $('#nameIn').value.trim(), relay = $('#relayIn').value.trim();
     if (!name) return alert('Enter your name');
@@ -1118,19 +1152,13 @@ if (typeof document !== 'undefined') (() => {
     $('#relayIn').value = defaultRelay();
     show('vSetup');
     if (/^#i=/.test(location.hash)) {
-      // Opened from an invite before having a profile: create one, then they're added automatically.
-      try {
-        const o = readInvite(location.hash);
-        pendingInvite = Object.assign({ raw: location.hash }, o);
-        paintAvatar($('#invitedAvatar'), o.n, o.p);
-        $('#invitedName').textContent = String(o.n || 'Someone').slice(0, 40);
-        $('#invitedBy').hidden = false;
-      } catch {}
+      setupInvite(location.hash);
       history.replaceState(null, '', location.pathname);
     } else if (/^#link=/.test(location.hash)) {
       history.replaceState(null, '', location.pathname);
       alert('This is a request to move a profile onto a new device. Open it (or scan it) on the device that already has your profile.');
     }
+    if (!$('#relayIn').value.trim()) $('#relayIn').closest('details').open = true;
     prepareSetup();
     $('#nameIn').focus();
   })();
