@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -46,11 +47,29 @@ func main() {
 	trusted := flag.String("trusted-proxies", os.Getenv("HUSH_TRUSTED_PROXIES"), "comma-separated proxy IPs allowed to report client addresses (local ones are trusted automatically)")
 	onion := flag.Bool("onion", os.Getenv("HUSH_ONION") == "1", "Tor onion-service mode: limits apply per mailbox because Tor hides client addresses")
 	fwd := flag.String("forwarded-header", envOr("HUSH_FORWARDED_HEADER", "X-Forwarded-For"), "header your proxy uses to report the client address (CF-Connecting-IP for Cloudflare Tunnel)")
+	prefix := flag.String("path", os.Getenv("HUSH_PATH"), "private path for the app and relay, e.g. /k7q4mxp2/ (everything else shows the front page); see -new-path")
+	cover := flag.String("cover", os.Getenv("HUSH_COVER"), "HTML file shown at every other address (default: a plain placeholder page)")
+	joinCode := flag.String("join-code", os.Getenv("HUSH_JOIN_CODE"), "invite-only mode: people need this code (it travels inside your invites) to use the relay")
+	newPath := flag.Bool("new-path", false, "print a random private path and join code, then exit")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("hush-relay", version)
 		return
+	}
+	if *newPath {
+		fmt.Printf("-path /%s/ -join-code %s\n", randWord(10), randWord(16))
+		return
+	}
+	base, err := cleanPrefix(*prefix)
+	if err != nil {
+		log.Fatal(err)
+	}
+	coverHTML := []byte(defaultCover)
+	if *cover != "" {
+		if coverHTML, err = os.ReadFile(*cover); err != nil {
+			log.Fatalf("cover page: %v", err)
+		}
 	}
 
 	site, err := siteFS(*webDir, *data)
@@ -62,9 +81,10 @@ func main() {
 		log.Fatalf("data folder: %v", err)
 	}
 	relay.SetForwardedHeader(*fwd)
+	relay.SetJoinCode(*joinCode)
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           newMux(relay, site, *webDir == ""),
+		Handler:           withPrefix(base, coverHTML, newMux(relay, site, *webDir == "")),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      90 * time.Second, // covers a slow 60 s upload or a 20 s long-poll plus delivery
@@ -94,9 +114,12 @@ func main() {
 	}
 	mode := ""
 	if *onion {
-		mode = ", onion mode"
+		mode += ", onion mode"
 	}
-	log.Printf("hush-relay %s on http://%s/ (data: %s%s)", version, ln.Addr(), *data, mode)
+	if relay.inviteOnly() {
+		mode += ", invite-only"
+	}
+	log.Printf("hush-relay %s on http://%s%s (data: %s%s)", version, ln.Addr(), base, *data, mode)
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
@@ -159,6 +182,78 @@ func realPath(p string) (string, error) {
 	}
 }
 
+// randWord returns n random lowercase letters and digits (no look-alikes).
+func randWord(n int) string {
+	const abc = "abcdefghjkmnpqrstuvwxyz23456789"
+	b := make([]byte, n)
+	_, _ = cryptorand.Read(b)
+	for i := range b {
+		b[i] = abc[int(b[i])%len(abc)]
+	}
+	return string(b)
+}
+
+// cleanPrefix normalises -path to "/" or "/segment/.../".
+func cleanPrefix(p string) (string, error) {
+	p = strings.TrimSpace(p)
+	if p == "" || p == "/" {
+		return "/", nil
+	}
+	p = "/" + strings.Trim(p, "/") + "/"
+	for _, seg := range strings.Split(strings.Trim(p, "/"), "/") {
+		if seg == "" || seg == "." || seg == ".." || strings.ContainsAny(seg, "?#%\\ ") {
+			return "", fmt.Errorf("-path %q: use letters, digits, - and _ only", p)
+		}
+	}
+	return p, nil
+}
+
+const defaultCover = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Welcome</title>
+<style>body{margin:0;font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#1f2933;background:#fafafa;display:grid;place-items:center;min-height:100vh}main{max-width:32rem;padding:2rem;text-align:center}h1{font-weight:600;font-size:1.6rem;margin:0 0 .5rem}p{color:#52606d;margin:0}</style>
+</head><body><main><h1>Welcome</h1><p>This site is being set up. Please check back later.</p></main></body></html>
+`
+
+// withPrefix serves the app and relay only under the private path. Every other
+// address shows the front page (or 404), like an ordinary small website.
+func withPrefix(base string, cover []byte, next http.Handler) http.Handler {
+	if base == "/" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		p := req.URL.Path
+		if p+"/" == base { // "/secret" -> "/secret/"
+			http.Redirect(w, req, base, http.StatusMovedPermanently)
+			return
+		}
+		if strings.HasPrefix(p, base) {
+			r2 := req.Clone(req.Context())
+			r2.URL.Path = "/" + strings.TrimPrefix(p, base)
+			r2.URL.RawPath = ""
+			next.ServeHTTP(w, r2)
+			return
+		}
+		h := w.Header()
+		h.Set("Content-Type", "text/html; charset=utf-8")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Content-Security-Policy", "frame-ancestors 'none'")
+		h.Set("Referrer-Policy", "no-referrer")
+		if req.Method != http.MethodGet && req.Method != http.MethodHead {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if p != "/" && p != "/index.html" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte("<!doctype html><title>Not found</title><p>Not found.</p>\n"))
+			return
+		}
+		if req.Method == http.MethodGet {
+			_, _ = w.Write(cover)
+		}
+	})
+}
+
 // newMux routes the relay API and the app. The relay answers at /relay.php so
 // invites and builds made for the PHP relay keep working, and at /relay.
 func newMux(relay *Relay, site fs.FS, fixed bool) http.Handler {
@@ -167,6 +262,8 @@ func newMux(relay *Relay, site fs.FS, fixed bool) http.Handler {
 		switch req.URL.Path {
 		case "/relay.php", "/relay":
 			relay.ServeHTTP(w, req)
+		case "/live":
+			relay.serveLive(w, req)
 		default:
 			static.ServeHTTP(w, req)
 		}

@@ -84,6 +84,11 @@ type Relay struct {
 	saltDay string
 	stripes [256]sync.Mutex // per-mailbox write locks, striped by box id
 
+	hub       *liveHub
+	joinHash  string          // sha256 of the join code; empty = open relay
+	members   map[string]bool // invite-only: mailboxes allowed on this relay
+	memberDir string
+
 	fwdHeader string        // header a trusted proxy uses to report the client address
 	busy      chan struct{} // semaphore for body-heavy work
 	quit      chan struct{} // closed on shutdown so waiting long-polls answer at once
@@ -105,18 +110,44 @@ func NewRelay(data string, trusted []string, onion bool) (*Relay, error) {
 		waiters: map[string][]chan struct{}{}, live: map[string]int{},
 		counts: map[string]counter{}, known: map[string]time.Time{},
 		fwdHeader: "X-Forwarded-For", busy: make(chan struct{}, maxBusy), quit: make(chan struct{}),
+		members: map[string]bool{}, memberDir: filepath.Join(data, "members"), hub: newLiveHub(),
 	}
 	for _, t := range trusted {
 		if t = strings.TrimSpace(t); t != "" {
 			r.trusted[t] = true
 		}
 	}
-	for _, d := range []string{data, r.recover} {
+	for _, d := range []string{data, r.recover, r.memberDir} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return nil, err
 		}
 	}
+	entries, _ := os.ReadDir(r.memberDir)
+	for _, e := range entries {
+		if isHex(e.Name(), 32) {
+			r.members[e.Name()] = true
+		}
+	}
 	return r, nil
+}
+
+// SetJoinCode turns on invite-only mode: only mailboxes registered with this
+// code can receive mail, fetch it, store recovery backups or open calls.
+func (r *Relay) SetJoinCode(code string) {
+	if code = strings.TrimSpace(code); code != "" {
+		r.joinHash = sha256hex("hush-join|" + code)
+	}
+}
+
+func (r *Relay) inviteOnly() bool { return r.joinHash != "" }
+
+func (r *Relay) isMember(box string) bool {
+	if !r.inviteOnly() {
+		return true
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.members[box]
 }
 
 // ---- helpers ---------------------------------------------------------------
@@ -394,6 +425,8 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 	q := req.URL.Query()
 	switch a := q.Get("a"); a {
+	case "info": // what the app needs to know before signing up
+		writeJSON(w, http.StatusOK, map[string]any{"v": 2, "invite": r.inviteOnly(), "calls": true})
 	case "put":
 		r.put(w, req, q.Get("box"))
 	case "rput", "rget", "rdel":
@@ -406,6 +439,14 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		box := sha256hex(s)[:32]
+		if a == "join" {
+			r.join(w, req, box, in)
+			return
+		}
+		if !r.isMember(box) {
+			fail(w, 403, "join code required")
+			return
+		}
 		switch a {
 		case "get":
 			r.get(w, req, box, q.Get("wait"))
@@ -417,9 +458,45 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+// join registers a mailbox on an invite-only relay. On an open relay it is a no-op.
+func (r *Relay) join(w http.ResponseWriter, req *http.Request, box string, in map[string]any) {
+	if !r.inviteOnly() {
+		okJSON(w)
+		return
+	}
+	key, _ := r.clientKey(req)
+	if !r.allow("join", key, time.Hour, 10) || !r.allow("join-all", "all", time.Minute, 60) {
+		fail(w, 429, "too many attempts")
+		return
+	}
+	code, _ := in["code"].(string)
+	got := sha256hex("hush-join|" + strings.TrimSpace(code))
+	if subtle.ConstantTimeCompare([]byte(got), []byte(r.joinHash)) != 1 {
+		fail(w, 403, "wrong join code")
+		return
+	}
+	r.mu.Lock()
+	known := r.members[box]
+	r.mu.Unlock()
+	if !known {
+		if err := os.WriteFile(filepath.Join(r.memberDir, box), nil, 0o600); err != nil {
+			fail(w, 500, "storage error")
+			return
+		}
+		r.mu.Lock()
+		r.members[box] = true
+		r.mu.Unlock()
+	}
+	okJSON(w)
+}
+
 func (r *Relay) put(w http.ResponseWriter, req *http.Request, box string) {
 	if len(req.URL.Query()["box"]) != 1 || !isHex(box, 32) {
 		fail(w, 400, "bad box")
+		return
+	}
+	if !r.isMember(box) { // invite-only: no mailbox by that name here
+		fail(w, 404, "unknown box")
 		return
 	}
 	key, distinct := r.clientKey(req)
@@ -670,6 +747,13 @@ func (r *Relay) slot(w http.ResponseWriter, req *http.Request, a string) {
 	if len(d) > maxSlot || !isB64URL(d) {
 		fail(w, 400, "bad data")
 		return
+	}
+	if r.inviteOnly() {
+		s, ok := strArg(in, "s", 64)
+		if !ok || !r.isMember(sha256hex(s)[:32]) {
+			fail(w, 403, "join code required")
+			return
+		}
 	}
 	if !exists {
 		key, distinct := r.clientKey(req)

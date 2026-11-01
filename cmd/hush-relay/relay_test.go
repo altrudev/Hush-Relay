@@ -579,3 +579,112 @@ func TestMiscReviewFixes(t *testing.T) {
 		t.Error("disk-served files must not get startup ETags")
 	}
 }
+
+// ---- private path, front page, invite-only ------------------------------------
+
+func TestPrivatePathAndCover(t *testing.T) {
+	r, inner := newTestRelay(t, false)
+	_ = r
+	h := withPrefix("/k7q4/", []byte("COVER"), inner)
+	get := func(p string) (int, string) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.URL.Path = p
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+	if c, b := get("/"); c != 200 || b != "COVER" {
+		t.Errorf("/ = %d %q", c, b)
+	}
+	for _, p := range []string{"/index.html.bak", "/relay.php", "/app.js", "/k7q", "/k7q4x/"} {
+		if c, b := get(p); c == 200 || strings.Contains(b, "app") {
+			t.Errorf("%s leaked: %d %q", p, c, b)
+		}
+	}
+	if c, _ := get("/k7q4"); c != 301 {
+		t.Errorf("/k7q4 should redirect, got %d", c)
+	}
+	if c, b := get("/k7q4/"); c != 200 || !strings.Contains(b, "app") {
+		t.Errorf("app under prefix: %d %q", c, b)
+	}
+	rec, _ := do(h, call{url: "/k7q4/relay.php?a=info"})
+	if rec.Code != 200 {
+		t.Errorf("relay under prefix: %d", rec.Code)
+	}
+	if rec, _ := do(h, call{url: "/relay.php?a=info"}); rec.Code == 200 {
+		t.Error("relay reachable outside the private path")
+	}
+	for _, bad := range []string{"/../x/", "/a b/", "/a%2f/"} {
+		if _, err := cleanPrefix(bad); err == nil {
+			t.Errorf("cleanPrefix accepted %q", bad)
+		}
+	}
+	if p, _ := cleanPrefix("abc/def"); p != "/abc/def/" {
+		t.Errorf("cleanPrefix normalisation: %q", p)
+	}
+}
+
+func TestInviteOnly(t *testing.T) {
+	r, h := newTestRelay(t, false)
+	r.SetJoinCode("open sesame")
+	_, info := do(h, call{url: "/relay.php?a=info"})
+	if info["invite"] != true {
+		t.Fatalf("info: %v", info)
+	}
+	s := secret(1)
+	box := boxOf(s)
+	if rec, _ := do(h, call{url: "/relay.php?a=put&box=" + box, body: blob(100)}); rec.Code != 404 {
+		t.Errorf("put to non-member = %d", rec.Code)
+	}
+	if rec, _ := do(h, call{url: "/relay.php?a=get", body: `{"s":"` + s + `"}`}); rec.Code != 403 {
+		t.Errorf("get by non-member = %d", rec.Code)
+	}
+	if rec, _ := do(h, call{url: "/relay.php?a=join", body: `{"s":"` + s + `","code":"wrong"}`}); rec.Code != 403 {
+		t.Errorf("wrong code = %d", rec.Code)
+	}
+	if rec, _ := do(h, call{url: "/relay.php?a=join", body: `{"s":"` + s + `","code":" open sesame "}`}); rec.Code != 200 {
+		t.Fatalf("join = %d", rec.Code)
+	}
+	if rec, _ := do(h, call{url: "/relay.php?a=put&box=" + box, body: blob(100)}); rec.Code != 200 {
+		t.Errorf("put to member = %d", rec.Code)
+	}
+	if rec, _ := do(h, call{url: "/relay.php?a=get", body: `{"s":"` + s + `"}`}); rec.Code != 200 {
+		t.Errorf("get by member = %d", rec.Code)
+	}
+	// Recovery: storing needs membership; reading needs only the 128-bit locator.
+	l := secret(9)[:32]
+	if rec, _ := do(h, call{url: "/relay.php?a=rput", body: `{"l":"` + l + `","t":"` + secret(2) + `","d":"x"}`}); rec.Code != 403 {
+		t.Errorf("rput without membership = %d", rec.Code)
+	}
+	if rec, _ := do(h, call{url: "/relay.php?a=rput", body: `{"l":"` + l + `","t":"` + secret(2) + `","d":"x","s":"` + s + `"}`}); rec.Code != 200 {
+		t.Errorf("rput by member = %d", rec.Code)
+	}
+	if rec, _ := do(h, call{url: "/relay.php?a=rget", body: `{"l":"` + l + `"}`}); rec.Code != 200 {
+		t.Errorf("rget = %d", rec.Code)
+	}
+	// Membership survives a restart.
+	r2, err := NewRelay(r.data, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2.SetJoinCode("open sesame")
+	if !r2.isMember(box) {
+		t.Error("membership lost on restart")
+	}
+	// Guessing the code is rate limited.
+	refused := 0
+	for i := 0; i < 15; i++ {
+		rec, _ := do(h, call{url: "/relay.php?a=join", body: `{"s":"` + secret(50+i) + `","code":"guess"}`, remote: "198.51.100.7:1"})
+		if rec.Code == 429 {
+			refused++
+		}
+	}
+	if refused != 5 {
+		t.Errorf("join attempts refused %d, want 5", refused)
+	}
+	// Open relays accept everything and join is a no-op.
+	_, h2 := newTestRelay(t, false)
+	if rec, _ := do(h2, call{url: "/relay.php?a=join", body: `{"s":"` + s + `"}`}); rec.Code != 200 {
+		t.Errorf("join on open relay = %d", rec.Code)
+	}
+}
