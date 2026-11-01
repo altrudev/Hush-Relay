@@ -7,5 +7,5 @@ package web
 
 import "embed"
 
-//go:embed index.html app.js sw.js config.js manifest.json icon.svg vendor/*.js vendor/*.txt
+//go:embed index.html app.js call.js worklet.js sw.js config.js manifest.json icon.svg vendor/*.js vendor/*.txt
 var Files embed.FS

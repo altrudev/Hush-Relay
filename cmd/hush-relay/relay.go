@@ -443,10 +443,8 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			r.join(w, req, box, in)
 			return
 		}
-		if !r.isMember(box) {
-			fail(w, 403, "join code required")
-			return
-		}
+		// Fetching from a mailbox that hasn't joined is harmless: nothing can be delivered
+		// to it, so it simply stays empty. Sending to it is what invite-only mode refuses.
 		switch a {
 		case "get":
 			r.get(w, req, box, q.Get("wait"))

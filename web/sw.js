@@ -3,7 +3,7 @@
 // Network-first with offline fallback: new deploys (cPanel or a new IPFS CID behind
 // DNSLink) are picked up immediately, and the app still opens without a connection.
 const CACHE = 'hush-shell';
-const SHELL = ['./', 'index.html', 'config.js', 'app.js', 'vendor/words.js', 'vendor/qrcode.js', 'manifest.json', 'icon.svg'];
+const SHELL = ['./', 'index.html', 'config.js', 'app.js', 'call.js', 'worklet.js', 'vendor/words.js', 'vendor/qrcode.js', 'manifest.json', 'icon.svg'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).catch(() => {}));

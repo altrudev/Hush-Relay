@@ -92,14 +92,19 @@ fi
 if [ "$E2E" = 1 ]; then
   echo "== browsers"
   # The earlier stages used up this client's rate limits; start from a clean slate.
+  # The Go relay runs the realistic setup: a private path and an invite-only relay.
+  BASE="http://localhost:$PORT/index.html"; JOIN=""
   if [ "$IMPL" = go ]; then
     kill $PID 2>/dev/null; wait $PID 2>/dev/null || true
-    "$TMP/hush-relay" -addr "localhost:$PORT" -data "$HUSH_DATA" >>"$TMP/server.log" 2>&1 &
+    JOIN="e2e-join-code"
+    "$TMP/hush-relay" -addr "localhost:$PORT" -data "$TMP/e2e-data" -path /e2e-private/ -join-code "$JOIN" >>"$TMP/server.log" 2>&1 &
     PID=$!
-    for _ in $(seq 50); do curl -s -o /dev/null "http://localhost:$PORT/index.html" && break; sleep 0.1; done
+    BASE="http://localhost:$PORT/e2e-private/index.html"
+    for _ in $(seq 50); do curl -s -o /dev/null "$BASE" && break; sleep 0.1; done
+    [ "$(curl -s "http://localhost:$PORT/")" != "$(curl -s "$BASE")" ] && echo "  ok   front page differs from the private app" || { echo "  FAIL front page shows the app"; exit 1; }
   else
     rm -rf "$HUSH_DATA/limits"
   fi
-  BASE="http://localhost:$PORT/index.html" python3 tests/e2e.py
+  BASE="$BASE" JOIN="$JOIN" python3 tests/e2e.py
 fi
 echo "All tests passed."

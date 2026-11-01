@@ -9,11 +9,11 @@ RELAY="${1:?usage: $0 https://your-host/path/relay.php}"
 [[ "$RELAY" =~ ^https://[A-Za-z0-9._~:/?=\&%-]+$ ]] || { echo "Relay must be a plain https:// URL" >&2; exit 1; }
 command -v ipfs >/dev/null || { echo "Install Kubo first: https://docs.ipfs.tech/install/command-line/" >&2; exit 1; }
 
-SRC="$(cd "$(dirname "$0")" && pwd)"
+SRC="$(cd "$(dirname "$0")/../web" && pwd)"
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 
-cp "$SRC"/{index.html,app.js,sw.js,manifest.json,icon.svg} "$OUT"/ && cp -r "$SRC/vendor" "$OUT"/
+cp "$SRC"/{index.html,app.js,call.js,worklet.js,sw.js,manifest.json,icon.svg} "$OUT"/ && cp -r "$SRC/vendor" "$OUT"/
 printf 'window.HUSH_CONFIG = { relay: "%s" };\n' "$RELAY" > "$OUT/config.js"
 
 CID="$(ipfs add -r -Q --cid-version=1 "$OUT")"

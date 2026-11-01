@@ -208,7 +208,7 @@ async function backupData(me, contacts) {
   return {
     v: 3,
     me: { jwk: await crypto.subtle.exportKey('jwk', me.priv), pub: me.pub, secret: me.secret, box: me.box,
-          name: me.name, relay: me.relay, rec: me.rec || null },
+          name: me.name, relay: me.relay, rec: me.rec || null, join: me.join || null, inviteTok: me.inviteTok || null },
     at: Date.now(),
     // Unanswered message requests are left out, so strangers cannot bloat the backup.
     contacts: contacts.filter(c => !c.request).slice(0, 500)
@@ -322,27 +322,72 @@ if (typeof document !== 'undefined') (() => {
   const $ = s => document.querySelector(s);
   const TP = { 'Content-Type': 'text/plain' };
   const sleep = ms => new Promise(r => setTimeout(r, ms));
-  let me = null, current = null, started = false, paused = false;
+  let me = null, current = null, started = false, paused = false, pendingInvite = null;
   const contacts = new Map(), seen = new Set(), locks = new Map();
   // Serialize ratchet work per contact so sends and receives never interleave.
   const lock = (id, fn) => { const p = (locks.get(id) || Promise.resolve()).then(fn); locks.set(id, p.catch(() => {})); return p; };
 
-  const views = ['vSetup', 'vPair', 'vList', 'vScan', 'vLink', 'vChat', 'vSettings'];
-  function show(v, title) {
-    for (const x of views) $('#' + x).hidden = x !== v;
-    $('#title').textContent = title || 'Hush Relay';
-    $('#back').hidden = !me || v === 'vList';
-    $('#settingsBtn').hidden = v !== 'vList';
-    if (v !== 'vChat') current = null;
-    if (v !== 'vScan') stopScanner();
+  // ----- small helpers -----
+  let toastTimer;
+  function toast(t, ms) {
+    $('#toast').textContent = t || '';
+    clearTimeout(toastTimer);
+    if (t && ms !== 0) toastTimer = setTimeout(() => { $('#toast').textContent = ''; }, ms || 2600);
   }
-  const status = t => { $('#status').textContent = t || ''; };
-  const defaultRelay = () => (window.HUSH_CONFIG && window.HUSH_CONFIG.relay) || new URL('relay.php', location.href).href;
   const fromStd = d => Uint8Array.from(atob(d), ch => ch.charCodeAt(0));
   const parseHashData = (text, key) => {
     const m = String(text).match(new RegExp('#' + key + '=([A-Za-z0-9_-]+)'));
     return m ? JSON.parse(dec.decode(b64d(m[1]))) : null;
   };
+  const defaultRelay = () => (window.HUSH_CONFIG && window.HUSH_CONFIG.relay) || new URL('relay.php', location.href).href;
+  const COLORS = ['#0e7a68', '#2f6db3', '#8a4fbf', '#c2410c', '#0f766e', '#b4235a', '#4d7c0f', '#6b5b95', '#9a6b00', '#1d6f8a'];
+  function paintAvatar(el, name, key) {
+    const words = String(name || '?').trim().split(/\s+/);
+    el.textContent = ((words[0] || '?')[0] + (words.length > 1 ? words[words.length - 1][0] : '')).toUpperCase();
+    let h = 0; for (const ch of String(key || name)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    el.style.background = COLORS[h % COLORS.length];
+  }
+  function fmtTime(ts) {
+    const d = new Date(ts), now = new Date();
+    return d.toDateString() === now.toDateString()
+      ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+      : d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ', ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+  const fmtDur = s => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+  const isHex = (s, n) => typeof s === 'string' && s.length === n && /^[0-9a-f]+$/.test(s);
+
+  // What a relay supports. Older (PHP) relays don't know "info": treat them as open, no calls.
+  async function relayInfo(url) {
+    try {
+      const r = await fetch(url + '?a=info', { method: 'POST', headers: TP, body: '{}' });
+      if (!r.ok) return { ok: r.status === 400, invite: false, calls: false };
+      const j = await r.json();
+      return { ok: true, invite: !!j.invite, calls: !!j.calls };
+    } catch { return { ok: false, invite: false, calls: false }; }
+  }
+  // The call endpoint lives next to the relay: …/relay.php -> …/live, https -> wss.
+  function liveURL(relay) {
+    const u = new URL(relay);
+    u.pathname = u.pathname.replace(/[^/]*$/, 'live');
+    u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
+    return u.href;
+  }
+
+  // ----- views -----
+  const views = ['vSetup', 'vList', 'vInvite', 'vAdd', 'vScan', 'vChat', 'vSafety', 'vPair', 'vLink', 'vSettings'];
+  function show(v, title, sub) {
+    for (const x of views) $('#' + x).hidden = x !== v;
+    $('#title').textContent = title || 'Hush Relay';
+    $('#subtitle').textContent = sub || ''; $('#subtitle').hidden = !sub;
+    $('#brandDot').hidden = v !== 'vList' && v !== 'vSetup';
+    $('#back').hidden = !me || v === 'vList' || v === 'vSetup';
+    $('#settingsBtn').hidden = $('#scanBtn').hidden = v !== 'vList';
+    const callable = v === 'vChat' && me && me.calls && self.HushCall && HushCall.supported();
+    $('#voiceBtn').hidden = $('#videoBtn').hidden = !callable;
+    if (v !== 'vChat' && v !== 'vSafety') current = null;
+    if (v !== 'vScan') stopScanner();
+  }
+  function goHome() { show('vList'); renderList(); }
 
   // ----- QR -----
   const scripts = {};
@@ -370,13 +415,13 @@ if (typeof document !== 'undefined') (() => {
   }
   let camera = null;
   async function openScanner() {
-    show('vScan', 'Scan QR code');
-    $('#scanNote').textContent = 'Point the camera at a Hush QR code, or choose a picture of one.';
+    show('vScan', 'Scan a code');
+    $('#scanNote').textContent = 'Point the camera at an invite or a move code, or choose a picture of one.';
     const v = $('#scanVideo');
     try {
       camera = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
       v.srcObject = camera; v.hidden = false; await v.play(); scanTick();
-    } catch { v.hidden = true; $('#scanNote').textContent = 'Camera not available. Choose a picture of the QR code instead.'; }
+    } catch { v.hidden = true; $('#scanNote').textContent = 'Camera not available. Choose a picture of the code instead.'; }
   }
   function stopScanner() { if (camera) { camera.getTracks().forEach(t => t.stop()); camera = null; } }
   async function scanTick() {
@@ -392,24 +437,34 @@ if (typeof document !== 'undefined') (() => {
     try {
       if (/#link=/.test(text)) return await showLinkRequest(text);
       if (/#i=/.test(text)) { const c = await addFromInvite(text); return openChat(c.id); }
-      throw new Error('That is not a Hush code');
-    } catch (e) { alert(e.message); show('vList'); renderList(); }
+      throw new Error('That is not a Hush Relay code');
+    } catch (e) { alert(e.message); goHome(); }
   }
 
-  // ----- contacts -----
+  // ----- contacts & invites -----
   function newContact(id, p, b, r, n) {
     return { id, pub: p, box: b, relay: r, name: String(n || 'Unknown').slice(0, 40), unread: 0, ts: Date.now(),
-      verified: false, blocked: false, sessions: {}, active: null };
+      verified: false, blocked: false, sessions: {}, active: null, last: '' };
   }
-  const inviteLink = () => location.origin + location.pathname + '#i=' + b64e(enc.encode(JSON.stringify({ p: me.pub, b: me.box, r: me.relay, n: me.name })));
-  async function addFromInvite(text) {
+  // An invite holds only what's needed to reach you, plus your relay's join code
+  // (so friends can sign up on it) and a token that marks them as invited by you.
+  function inviteLink() {
+    const o = { p: me.pub, b: me.box, r: me.relay, n: me.name, k: me.inviteTok };
+    if (me.join) o.j = me.join;
+    return location.origin + location.pathname + '#i=' + b64e(enc.encode(JSON.stringify(o)));
+  }
+  function readInvite(text) {
     const o = parseHashData(text, 'i');
-    if (!o) throw new Error('That does not look like an invite link');
+    if (!o || typeof o.p !== 'string') throw new Error('That does not look like an invite link');
+    if (!isBox(o.b) || !isRelay(o.r)) throw new Error('This invite is incomplete');
+    return o;
+  }
+  async function addFromInvite(text) {
+    const o = readInvite(text);
     if (o.p === me.pub) throw new Error('That is your own invite');
-    if (!isBox(o.b) || !isRelay(o.r)) throw new Error('Invite is incomplete');
     await importPub(o.p);
     const id = await contactId(o.p);
-    let c = contacts.get(id);
+    let c = contacts.get(id), fresh = false;
     if (c) {
       if (c.blocked) {
         if (!confirm(c.name + ' is blocked. Unblock them?')) return c;
@@ -417,32 +472,33 @@ if (typeof document !== 'undefined') (() => {
       }
       // Invites are not signed, so an invite never silently re-routes an existing contact.
       if ((c.box !== o.b || c.relay !== o.r) &&
-          confirm('This invite has a different mailbox for ' + c.name + ' than the one you have. Only switch if they told you they moved. Switch?')) {
+          confirm('This invite has a different address for ' + c.name + ' than the one you have. Only switch if they told you they moved. Switch?')) {
         c.box = o.b; c.relay = o.r;
       }
       c.request = false;
-    } else { c = newContact(id, o.p, o.b, o.r, o.n); contacts.set(id, c); }
+    } else { c = newContact(id, o.p, o.b, o.r, o.n); contacts.set(id, c); fresh = true; }
     await saveContact(c); scheduleSync();
+    // Say hello so they see you straight away (and know you came from their invite).
+    if (fresh && typeof o.k === 'string') post(c, { t: 'hello', k: o.k.slice(0, 64), id: hex(rand(8)), ts: Date.now() }).catch(() => {});
     return c;
   }
-  async function checkRelay(url) {
-    try {
-      const r = await fetch(url + '?a=get', { method: 'POST', headers: TP, body: '{}' });
-      return r.status === 400 && /^bad/.test((await r.json()).error);
-    } catch { return false; }
-  }
 
-  // ----- list -----
-  function renderList() {
+  // ----- contact list -----
+  async function renderList() {
     const ul = $('#contactList'); ul.textContent = '';
     const arr = [...contacts.values()].filter(c => !c.blocked).sort((a, b) => b.ts - a.ts);
     $('#empty').hidden = arr.length > 0;
     for (const c of arr) {
       const li = document.createElement('li'); li.className = 'contact';
-      const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = c.name;
-      li.append(nm);
-      const tag = c.request ? 'request' : !c.verified ? 'unverified' : '';
-      if (tag) { const t = document.createElement('span'); t.className = 'tag'; t.textContent = tag; li.append(t); }
+      const av = document.createElement('span'); av.className = 'avatar'; paintAvatar(av, c.name, c.id);
+      const who = document.createElement('div'); who.className = 'who';
+      const nm = document.createElement('div'); nm.className = 'nm';
+      const nmText = document.createElement('span'); nmText.textContent = c.name; nm.append(nmText);
+      if (c.verified) nm.insertAdjacentHTML('beforeend', '<svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-label="Verified"><path d="M20 6L9 17l-5-5"/></svg>');
+      if (c.request) { const t = document.createElement('span'); t.className = 'tag'; t.textContent = 'Request'; nm.append(t); }
+      const pv = document.createElement('div'); pv.className = 'pv'; pv.textContent = c.last || (c.request ? 'Wants to message you' : 'Say hello');
+      who.append(nm, pv);
+      li.append(av, who);
       if (c.unread) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = c.unread; li.append(b); }
       li.onclick = () => openChat(c.id);
       ul.append(li);
@@ -450,37 +506,49 @@ if (typeof document !== 'undefined') (() => {
   }
 
   // ----- chat -----
+  const trustLabel = c => c.request ? 'Message request' : c.verified ? 'Verified' : 'Not verified yet';
   async function openChat(id) {
     const c = contacts.get(id); if (!c) return;
-    show('vChat', c.name); current = id;
+    show('vChat', c.name, trustLabel(c)); current = id;
     if (c.unread) { c.unread = 0; await saveContact(c); }
-    await renderBanner(c);
+    renderTrust(c);
     await renderMsgs();
   }
-  async function renderBanner(c) {
-    const el = $('#banner'); el.textContent = '';
-    const sn = document.createElement('code'); sn.textContent = await safetyNumber(me.pub, c.pub);
-    const p = document.createElement('div');
-    p.textContent = c.request
-      ? 'Message request from someone not in your contacts. Names can be faked: compare this safety number before trusting it. Replying accepts the request.'
-      : c.verified ? 'Verified. Safety number:' : 'Compare this safety number with ' + c.name + ' in person or by call before trusting this chat:';
-    el.append(p, sn);
-    const row = document.createElement('div'); row.className = 'row'; row.style.margin = '0';
-    if (!c.verified) {
-      const v = document.createElement('button'); v.textContent = 'Numbers match';
-      v.onclick = async () => { c.verified = true; await saveContact(c); scheduleSync(); renderBanner(c); };
-      row.append(v);
-    }
-    if (c.request) {
-      const del = document.createElement('button'); del.textContent = 'Delete request';
-      del.onclick = async () => { contacts.delete(c.id); await dropContact(c.id); show('vList'); renderList(); };
-      row.append(del);
-    }
-    const bl = document.createElement('button'); bl.textContent = 'Block';
-    bl.onclick = async () => { if (!confirm('Block ' + c.name + '?')) return; c.blocked = true; await saveContact(c); scheduleSync(); show('vList'); renderList(); };
-    row.append(bl);
-    el.append(row);
+  function renderTrust(c) {
+    const b = $('#trustBar');
+    b.hidden = c.verified && !c.request;
+    b.className = 'trust';
+    b.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg><span></span>';
+    b.querySelector('span').textContent = c.request
+      ? 'Someone new wants to message you. Names can be faked: check their safety code. Replying accepts the request.'
+      : 'Tap to compare your safety code with ' + c.name + ' once, so you know nobody is in the middle.';
+    b.onclick = () => openSafety(c.id);
   }
+  async function openSafety(id) {
+    const c = contacts.get(id); if (!c) return;
+    show('vSafety', 'Safety code'); current = id;
+    paintAvatar($('#safAvatar'), c.name, c.id);
+    $('#safName').textContent = c.name;
+    $('#safState').textContent = c.verified ? 'You verified this contact.' : c.request ? 'Message request · not verified' : 'Not verified yet';
+    const grid = $('#safetyGrid'); grid.textContent = '';
+    for (const g of (await safetyNumber(me.pub, c.pub)).split(' ')) { const s = document.createElement('span'); s.textContent = g; grid.append(s); }
+    $('#verifyBtn').hidden = c.verified;
+    $('#deleteReqBtn').hidden = !c.request;
+  }
+  $('#verifyBtn').onclick = async () => {
+    const c = contacts.get(current); if (!c) return;
+    c.verified = true; await saveContact(c); scheduleSync(); toast('Verified'); openChat(c.id);
+  };
+  $('#deleteReqBtn').onclick = async () => {
+    const c = contacts.get(current); if (!c) return;
+    contacts.delete(c.id); await dropContact(c.id); goHome();
+  };
+  $('#blockBtn').onclick = async () => {
+    const c = contacts.get(current); if (!c) return;
+    if (!confirm('Block ' + c.name + '? You won\'t receive their messages.')) return;
+    c.blocked = true; await saveContact(c); scheduleSync(); goHome();
+  };
+
   async function renderMsgs() {
     if (!current) return;
     const ol = $('#msgs'); ol.textContent = '';
@@ -491,14 +559,17 @@ if (typeof document !== 'undefined') (() => {
       li.textContent = m.txt;
       if (m.dir !== 'sys') {
         const s = document.createElement('small');
-        s.textContent = new Date(m.ts).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) +
-          (m.dir === 'out' ? ' · ' + (m.state === 'failed' ? 'failed, tap to retry' : m.state) : '');
+        s.textContent = fmtTime(m.ts) + (m.dir === 'out' ? ' · ' + (m.state === 'failed' ? 'not sent, tap to retry' : m.state) : '');
         li.append(s);
       }
       if (m.state === 'failed') li.onclick = () => deliver(contacts.get(m.contact), m);
       ol.append(li);
     }
     ol.scrollTop = ol.scrollHeight;
+  }
+  async function note(c, txt) {
+    await putMessage({ contact: c.id, dir: 'sys', txt, ts: Date.now() });
+    if (current === c.id) renderMsgs();
   }
 
   async function post(c, msg) {
@@ -514,10 +585,10 @@ if (typeof document !== 'undefined') (() => {
   }
   async function send(text) {
     const c = contacts.get(current); if (!c || !text.trim()) return;
-    if (c.request) { c.request = false; scheduleSync(); renderBanner(c); }
+    if (c.request) { c.request = false; scheduleSync(); renderTrust(c); show('vChat', c.name, trustLabel(c)); current = c.id; }
     const m = { contact: c.id, dir: 'out', txt: text, ts: Date.now(), mid: hex(rand(8)), state: 'sending' };
     m.id = await putMessage(m);
-    c.ts = m.ts; await saveContact(c);
+    c.ts = m.ts; c.last = 'You: ' + text.slice(0, 80); await saveContact(c);
     await deliver(c, m);
   }
 
@@ -526,6 +597,7 @@ if (typeof document !== 'undefined') (() => {
     const inner = await openOuter(me, bytes);
     if (inner.v !== 2 || typeof inner.f !== 'string' || inner.f === me.pub) throw new Error('unsupported message');
     const id = await contactId(inner.f);
+    let callMsg = null;
     await lock(id, async () => {
       let c = contacts.get(id), isNew = false;
       if (c && c.blocked) return;
@@ -537,9 +609,7 @@ if (typeof document !== 'undefined') (() => {
       }
       const msg = await decryptFrom(me, c, inner); // throws unless the sender really holds that identity key
       // Only the newest live session may change where we send replies (a replay can't re-route us).
-      if (!isNew && c.active === inner.s && isBox(inner.b) && isRelay(inner.r)) {
-        c.box = inner.b; c.relay = inner.r;
-      }
+      if (!isNew && c.active === inner.s && isBox(inner.b) && isRelay(inner.r)) { c.box = inner.b; c.relay = inner.r; }
       if (isNew) {
         // Strangers can't crowd out real contacts: at most 200 open requests, oldest dropped first.
         const reqs = [...contacts.values()].filter(x => x.request).sort((a, b) => a.ts - b.ts);
@@ -547,23 +617,30 @@ if (typeof document !== 'undefined') (() => {
         if ([...contacts.values()].filter(x => !x.request).length >= 5000) return;
       }
       contacts.set(id, c);
-      if (msg.t === 'msg' && typeof msg.txt === 'string') {
-        const key = id + ':' + msg.id;
-        if (!seen.has(key)) {
-          seen.add(key);
-          await putMessage({ contact: id, dir: 'in', txt: msg.txt.slice(0, 4000), ts: Date.now(), mid: msg.id });
-          c.ts = Date.now();
-          if (current !== id) c.unread = (c.unread || 0) + 1;
-        }
+      const dup = typeof msg.id === 'string' && seen.has(id + ':' + msg.id);
+      if (typeof msg.id === 'string') seen.add(id + ':' + msg.id);
+      if (msg.t === 'msg' && typeof msg.txt === 'string' && !dup) {
+        await putMessage({ contact: id, dir: 'in', txt: msg.txt.slice(0, 4000), ts: Date.now(), mid: msg.id });
+        c.ts = Date.now(); c.last = msg.txt.slice(0, 80);
+        if (current !== id) c.unread = (c.unread || 0) + 1;
+      } else if (msg.t === 'hello' && !dup) {
+        // Someone joined through your invite: they're expected, not a stranger.
+        if (isNew && me.inviteTok && msg.k === me.inviteTok) c.request = false;
+        c.ts = Date.now(); c.last = c.request ? 'Wants to message you' : 'Joined with your invite';
+        await putMessage({ contact: id, dir: 'sys', txt: c.name + (c.request ? ' wants to message you.' : ' joined using your invite.'), ts: Date.now() });
+        if (current !== id) c.unread = (c.unread || 0) + 1;
       } else if (msg.t === 'reset' && c.opened === inner.s) {
         // The contact moved to a new device: this new session replaces all earlier ones.
         c.active = inner.s;
         for (const s of Object.keys(c.sessions)) if (s !== inner.s) delete c.sessions[s];
         await putMessage({ contact: id, dir: 'sys', txt: c.name + ' signed in on a new device. Anything sent to them just before may be lost.', ts: Date.now() });
+      } else if (/^call/.test(msg.t || '') && !dup) {
+        callMsg = { c, msg };
       }
       await saveContact(c);
       if (!c.request) scheduleSync();
     });
+    if (callMsg) onCallMessage(callMsg.c, callMsg.msg);
   }
 
   // Live mode: the relay holds each request open until mail arrives (up to 20s).
@@ -586,16 +663,16 @@ if (typeof document !== 'undefined') (() => {
       }
       if (done.length) {
         await fetch(me.relay + '?a=ack', { method: 'POST', headers: TP, body: JSON.stringify({ s: me.secret, ids: done }) });
-        if (current) renderMsgs(); else if (!$('#vList').hidden) renderList();
+        if (current && !$('#vChat').hidden) renderMsgs(); else if (!$('#vList').hidden) renderList();
       }
-      status('');
+      if ($('#toast').textContent === 'Offline — reconnecting…') toast('');
       return true;
-    } catch { status('Relay unreachable — retrying'); return false; }
+    } catch { toast('Offline — reconnecting…', 0); return false; }
   }
   async function liveLoop() {
     let backoff = 2000;
     while (me) {
-      if (paused || document.visibilityState !== 'visible') { await sleep(1000); continue; }
+      if (paused || (document.visibilityState !== 'visible' && !activeCall)) { await sleep(1000); continue; }
       const t0 = Date.now();
       if (await pollOnce(20)) backoff = 2000;
       else { await sleep(backoff); backoff = Math.min(backoff * 2, 60000); }
@@ -604,6 +681,105 @@ if (typeof document !== 'undefined') (() => {
     }
   }
 
+  // ----- calls -----
+  let activeCall = null; // { call, c, id, role, video, ringTimer, startedAt, tick }
+  // Frame counters only (no content), used by the automated call test.
+  window.__hushCallStats = () => activeCall && activeCall.call ? Object.assign({}, activeCall.call.stats) : null;
+  function callUI(c, state, incoming) {
+    $('#vCall').hidden = false;
+    paintAvatar($('#callAvatar'), c.name, c.id);
+    $('#callName').textContent = c.name;
+    $('#callState').textContent = state;
+    $('#callInfo').hidden = false;
+    $('#callBarIncoming').hidden = !incoming; $('#callBarActive').hidden = !!incoming;
+    const g = $('#remoteCanvas').getContext('2d'); g.fillStyle = '#0d1117'; g.fillRect(0, 0, 9999, 9999);
+    $('#callMute').classList.remove('off'); $('#callCam').classList.remove('off');
+  }
+  function closeCallUI() { $('#vCall').hidden = true; $('#localVideo').hidden = true; }
+  async function startCall(video) {
+    const c = contacts.get(current); if (!c || activeCall) return;
+    if (!HushCall.supported()) return alert('Calls need a newer browser (or the Hush Relay Android app).');
+    const id = hex(rand(8)), room = hex(rand(32)), key = b64e(rand(32)), live = liveURL(me.relay);
+    activeCall = { c, id, role: 'caller', video };
+    callUI(c, 'Calling…', false);
+    try {
+      const call = makeCall({ url: live, room, key, role: 'caller', secret: me.secret, video });
+      activeCall.call = call;
+      await call.start(); // room is open before they're told about it
+      if (!(await post(c, { t: 'call', id, room, key, live, video, ts: Date.now() }))) throw new Error('Could not reach ' + c.name);
+      activeCall.ringTimer = setTimeout(() => { if (activeCall && activeCall.id === id && activeCall.call.state !== 'live') endCall('No answer', true); }, 45000);
+    } catch (e) { endCall(e.message || 'Call failed', true); }
+  }
+  function makeCall(opts) {
+    return new HushCall(Object.assign({ canvas: $('#remoteCanvas'), localVideo: $('#localVideo'), onState: onCallState }, opts));
+  }
+  function onCallState(state, info) {
+    const ac = activeCall; if (!ac) return;
+    if (state === 'connecting') $('#callState').textContent = ac.role === 'caller' ? 'Calling…' : 'Connecting…';
+    else if (state === 'waiting') $('#callState').textContent = 'Ringing…';
+    else if (state === 'live') {
+      clearTimeout(ac.ringTimer);
+      ac.startedAt = Date.now();
+      $('#callBarIncoming').hidden = true; $('#callBarActive').hidden = false;
+      const upd = () => { $('#callState').textContent = fmtDur((Date.now() - ac.startedAt) / 1000); };
+      upd(); ac.tick = setInterval(upd, 1000);
+    } else if (state === 'video') $('#callInfo').hidden = true;
+    else if (state === 'remote-av') $('#callInfo').hidden = info.video && ac.call.stats.drawn > 0;
+    else if (state === 'ended') {
+      const why = info.reason === 'error' ? (info.detail || 'Call failed') : info.reason === 'lost' ? 'Connection lost' : 'Call ended';
+      endCall(info.wasLive ? null : why, false);
+    }
+  }
+  async function endCall(reason, tellPeer) {
+    const ac = activeCall; if (!ac) return;
+    activeCall = null;
+    clearTimeout(ac.ringTimer); clearInterval(ac.tick);
+    if (tellPeer) post(ac.c, { t: 'call-end', id: ac.id, ts: Date.now() }).catch(() => {});
+    if (ac.call && ac.call.state !== 'ended') ac.call.hangup();
+    closeCallUI();
+    const kind = ac.video ? 'Video call' : 'Voice call';
+    await note(ac.c, ac.startedAt ? kind + ' · ' + fmtDur((Date.now() - ac.startedAt) / 1000) : kind + ' · ' + (reason || 'ended'));
+    if (reason) toast(reason);
+  }
+  function onCallMessage(c, msg) {
+    const kind = msg.video ? 'video call' : 'voice call';
+    if (msg.t === 'call') {
+      if (Date.now() - (msg.ts || 0) > 60000) return note(c, 'Missed ' + kind);
+      // Only join calls hosted on the caller's own relay, so a message can't send us anywhere else.
+      let ok = false;
+      try { const u = new URL(msg.live), r = new URL(c.relay); ok = u.host === r.host && /^wss?:$/.test(u.protocol) && isHex(msg.room, 64) && typeof msg.key === 'string'; } catch {}
+      if (!ok) return note(c, 'Ignored a call with an unexpected address');
+      if (activeCall || !HushCall.supported()) {
+        post(c, { t: 'call-decline', id: msg.id, busy: true, ts: Date.now() }).catch(() => {});
+        return note(c, 'Missed ' + kind + (activeCall ? ' (you were in another call)' : ' (this browser can\'t do calls)'));
+      }
+      activeCall = { c, id: msg.id, role: 'callee', video: !!msg.video, incoming: msg };
+      callUI(c, 'Incoming ' + kind, true);
+      activeCall.ringTimer = setTimeout(() => { if (activeCall && activeCall.id === msg.id && !activeCall.call) endCall('Missed ' + kind, false); }, 45000);
+    } else if ((msg.t === 'call-end' || msg.t === 'call-decline') && activeCall && activeCall.id === msg.id && activeCall.c.id === c.id) {
+      endCall(msg.t === 'call-decline' ? (msg.busy ? c.name + ' is busy' : 'Declined') : (activeCall.call && activeCall.call.state === 'live' ? null : 'Call ended'), false);
+    }
+  }
+  $('#callAccept').onclick = async () => {
+    const ac = activeCall; if (!ac || ac.role !== 'callee' || ac.call) return;
+    clearTimeout(ac.ringTimer);
+    $('#callBarIncoming').hidden = true; $('#callBarActive').hidden = false;
+    $('#callState').textContent = 'Connecting…';
+    const m = ac.incoming;
+    try { ac.call = makeCall({ url: m.live, room: m.room, key: m.key, role: 'callee', video: ac.video }); await ac.call.start(); }
+    catch (e) { endCall(e.message || 'Call failed', true); }
+  };
+  $('#callDecline').onclick = () => {
+    const ac = activeCall; if (!ac) return;
+    post(ac.c, { t: 'call-decline', id: ac.id, ts: Date.now() }).catch(() => {});
+    endCall('Declined', false);
+  };
+  $('#callEnd').onclick = () => endCall(null, !(activeCall && activeCall.call && activeCall.call.state === 'live'));
+  $('#callMute').onclick = () => { const ac = activeCall; if (!ac || !ac.call) return; const m = !ac.call.muted; ac.call.setMuted(m); $('#callMute').classList.toggle('off', m); };
+  $('#callCam').onclick = () => { const ac = activeCall; if (!ac || !ac.call) return; const on = ac.call.camOff; if (ac.call.setCamera(on)) $('#callCam').classList.toggle('off', !on); };
+  $('#voiceBtn').onclick = () => startCall(false);
+  $('#videoBtn').onclick = () => startCall(true);
+
   // ----- recovery words -----
   let syncTimer = null;
   function scheduleSync() { if (me && me.rec) { clearTimeout(syncTimer); syncTimer = setTimeout(syncRecovery, 2000); } }
@@ -611,14 +787,14 @@ if (typeof document !== 'undefined') (() => {
     if (!me || !me.rec) return false;
     try {
       const d = await sealRecovery(me.rec, await backupData(me, [...contacts.values()]));
-      const r = await fetch(me.relay + '?a=rput', { method: 'POST', headers: TP, body: JSON.stringify({ l: me.rec.l, t: me.rec.t, d }) });
+      const r = await fetch(me.relay + '?a=rput', { method: 'POST', headers: TP, body: JSON.stringify({ l: me.rec.l, t: me.rec.t, d, s: me.secret }) });
       if (!r.ok) throw new Error('relay answered ' + r.status);
       if (me.recError) { me.recError = null; await kvSet('me', me); }
       return true;
     } catch (e) {
       console.warn('recovery sync failed', e);
       me.recError = String(e.message || e); await kvSet('me', me);
-      status('Recovery backup could not be updated — see Settings');
+      toast('Recovery backup could not be updated — see Settings', 5000);
       return false;
     }
   }
@@ -637,16 +813,16 @@ if (typeof document !== 'undefined') (() => {
   $('#recSave').onclick = async () => {
     let typed;
     try { typed = normWords($('#recConfirm').value); } catch (e) { return alert(e.message); }
-    if (typed !== draftWords) return alert('Those words do not match. Check the order and spelling.');
-    status('Setting up recovery…');
+    if (typed !== draftWords) return alert('Those words don\'t match. Check the order and spelling.');
+    toast('Setting up recovery…', 0);
     const rec = await recoveryKeys(draftWords);
     const old = me.rec; me.rec = rec;
     if (!(await syncRecovery())) {
-      const why = me.recError || ''; me.rec = old; me.recError = null; status('');
+      const why = me.recError || ''; me.rec = old; me.recError = null; toast('');
       return alert(/429/.test(why) ? 'Your relay limits how many new recovery backups can be created per day. Try again tomorrow.'
         : 'Could not save the recovery backup to your relay (' + why + '). Try again.');
     }
-    await kvSet('me', me); draftWords = null; status(''); renderRecovery();
+    await kvSet('me', me); draftWords = null; toast('Recovery words are on'); renderRecovery();
   };
   $('#recCancel').onclick = () => { draftWords = null; renderRecovery(); };
   $('#recDisable').onclick = async () => {
@@ -657,29 +833,32 @@ if (typeof document !== 'undefined') (() => {
   $('#recoverBtn').onclick = async () => {
     const relay = $('#relayIn').value.trim() || defaultRelay();
     let rec;
-    try { status('Checking words…'); rec = await recoveryKeys($('#recoverWords').value); }
-    catch (e) { status(''); return alert(e.message); }
+    try { toast('Checking words…', 0); rec = await recoveryKeys($('#recoverWords').value); }
+    catch (e) { toast(''); return alert(e.message); }
     try {
       const r = await fetch(relay + '?a=rget', { method: 'POST', headers: TP, body: JSON.stringify({ l: rec.l }) });
-      if (r.status === 404) throw new Error('No account found for those words on this relay. Check the words and the relay address above.');
+      if (r.status === 404) throw new Error('No profile found for those words on this relay. Check the words, and the relay address under "Advanced".');
       if (!r.ok) throw new Error('Relay error ' + r.status);
       const data = await openRecovery(rec, (await r.json()).d);
       data.me.rec = rec;
       await adopt(data);
     } catch (e) { alert(e.message); }
-    status('');
+    toast('');
   };
 
-  // ----- device linking -----
-  // New device: show a one-time QR holding a fresh public key and a mailbox to drop the account into.
+  // ----- moving to a new device -----
+  // New device: show a one-time QR holding a fresh public key and a mailbox to drop the profile into.
   let pairing = null;
   $('#pairBtn').onclick = async () => {
     const relay = $('#relayIn').value.trim() || defaultRelay();
     if (!isRelay(relay)) return alert('Relay must be an https:// or .onion address');
     const kp = await genKP(), secret = hex(rand(32)), box = (await sha(secret)).slice(0, 32);
-    const url = location.origin + location.pathname + '#link=' + b64e(enc.encode(JSON.stringify({ r: relay, b: box, e: kp.pub })));
+    // The temporary mailbox secret travels in the code so the old phone can admit it on an
+    // invite-only relay. It only unlocks a sealed envelope that needs this device's key.
+    const url = location.origin + location.pathname + '#link=' + b64e(enc.encode(JSON.stringify({ r: relay, e: kp.pub, s: secret })));
     const my = pairing = { kp, until: Date.now() + 10 * 60000 };
-    show('vPair', 'Link this device');
+    show('vPair', 'Move your profile');
+    $('#back').hidden = true;
     $('#pairLink').value = url;
     $('#pairCode').textContent = await linkCode(kp.pub);
     renderQR($('#pairQR'), url);
@@ -693,7 +872,7 @@ if (typeof document !== 'undefined') (() => {
           if (pairing !== my || !bundle || bundle.t !== 'link') continue;
           const who = bundle.data && bundle.data.me ? String(bundle.data.me.name || '?').slice(0, 40) : '?';
           const n = bundle.data && Array.isArray(bundle.data.contacts) ? bundle.data.contacts.length : 0;
-          if (!confirm('Sign in as "' + who + '" with ' + n + ' contact(s)? Only continue if this is your own account.')) continue;
+          if (!confirm('Sign in as "' + who + '" with ' + n + ' contact(s)? Only continue if this is your own profile.')) continue;
           pairing = null;
           fetch(relay + '?a=ack', { method: 'POST', headers: TP, body: JSON.stringify({ s: secret, ids: [it.id] }) }).catch(() => {});
           try { await adopt(bundle.data); }
@@ -704,60 +883,69 @@ if (typeof document !== 'undefined') (() => {
         }
       } catch { await sleep(3000); }
     }
-    if (pairing === my) { pairing = null; alert('This link request expired. Start again.'); show('vSetup'); }
+    if (pairing === my) { pairing = null; alert('This move code expired. Start again.'); show('vSetup'); }
   };
   $('#pairCancel').onclick = () => { pairing = null; show('vSetup'); };
-  $('#pairCopy').onclick = async () => { try { await navigator.clipboard.writeText($('#pairLink').value); status('Copied'); setTimeout(() => status(''), 1500); } catch { $('#pairLink').select(); } };
+  $('#pairCopy').onclick = async () => { try { await navigator.clipboard.writeText($('#pairLink').value); toast('Copied'); } catch { $('#pairLink').select(); } };
 
-  // Old device: approve, send the account, wait for the new device to confirm, then sign out.
+  // Old device: approve, send the profile, wait for the new device to confirm, then sign out.
   let pendingLink = null;
   async function showLinkRequest(text) {
     const o = parseHashData(text, 'link');
-    if (!o || !isRelay(o.r) || !isBox(o.b) || typeof o.e !== 'string') throw new Error('That link request is damaged');
+    if (o && isHex(o.s, 64)) o.b = (await sha(o.s)).slice(0, 32); // the mailbox follows from its secret
+    if (!o || !isRelay(o.r) || !isBox(o.b) || typeof o.e !== 'string') throw new Error('That move code is damaged');
     await importPub(o.e);
     pendingLink = o;
-    show('vLink', 'Move account');
+    show('vLink', 'Move your profile');
     $('#linkCode').textContent = await linkCode(o.e);
   }
-  $('#linkCancel').onclick = () => { pendingLink = null; show('vList'); renderList(); };
+  $('#linkCancel').onclick = () => { pendingLink = null; goHome(); };
   $('#linkApprove').onclick = async () => {
     const o = pendingLink; if (!o) return;
     pendingLink = null; paused = true;
-    $('#linkApprove').disabled = true; status('Sending account…');
+    $('#linkApprove').disabled = true; toast('Sending your profile…', 0);
     const ackSecret = hex(rand(32)), ackBox = (await sha(ackSecret)).slice(0, 32);
     try {
+      if (me.join) { // invite-only relays: admit the two temporary mailboxes used for the move
+        const join = (relay, s) => fetch(relay + '?a=join', { method: 'POST', headers: TP, body: JSON.stringify({ s, code: me.join }) }).catch(() => {});
+        await join(me.relay, ackSecret);
+        if (isHex(o.s, 64)) await join(o.r, o.s);
+      }
       const bundle = { t: 'link', data: await backupData(me, [...contacts.values()]), ack: { r: me.relay, b: ackBox } };
       const r = await fetch(o.r + '?a=put&box=' + o.b, { method: 'POST', headers: TP, body: await sealOuter(bundle, o.e) });
       if (!r.ok) throw new Error('the relay refused it (' + r.status + ')');
-      status('Waiting for the new device to confirm…');
+      toast('Waiting for the new device to confirm…', 0);
       const until = Date.now() + 120000;
       while (Date.now() < until) {
         const g = await fetch(me.relay + '?a=get&wait=20', { method: 'POST', headers: TP, body: JSON.stringify({ s: ackSecret }) });
         const items = g.ok ? await g.json() : [];
         if (items.length) {
           await fetch(me.relay + '?a=ack', { method: 'POST', headers: TP, body: JSON.stringify({ s: ackSecret, ids: items.map(i => i.id) }) }).catch(() => {});
-          return wipe('Your account moved to the new device. This device is now signed out.');
+          return wipe('Your profile moved to the new device. This device is now signed out.');
         }
         if (!g.ok) await sleep(2000);
       }
       throw new Error('the new device did not confirm');
     } catch (e) {
-      paused = false; status(''); $('#linkApprove').disabled = false;
-      alert('Transfer not confirmed: ' + e.message + '. This device stays signed in. If the new device signed in anyway, erase one of them.');
-      show('vList'); renderList();
+      paused = false; toast(''); $('#linkApprove').disabled = false;
+      alert('Move not confirmed: ' + e.message + '. This device stays signed in. If the new device signed in anyway, erase one of them.');
+      goHome();
     }
   };
 
-  // Take over an account bundle (link, recovery words or backup file).
+  // Take over a profile bundle (move, recovery words or backup file).
   async function adopt(data) {
     const r = await restoreData(data);
-    me = r.me; await kvSet('me', me);
+    me = r.me;
+    if (!me.inviteTok) me.inviteTok = b64e(rand(12));
+    const info = await relayInfo(me.relay); me.calls = info.calls;
+    await kvSet('me', me);
     for (const x of r.contacts) {
       if (!isBox(x.box) || !isRelay(x.relay)) continue;
       try { await importPub(x.pub); } catch { continue; }
       const c = newContact(await contactId(x.pub), x.pub, x.box, x.relay, x.name);
       c.verified = !!x.verified; c.blocked = !!x.blocked;
-      c.floor = Date.now(); // opening messages from before this copy of the account are replays
+      c.floor = Date.now(); // opening messages from before this copy of the profile are replays
       contacts.set(c.id, c); await saveContact(c);
     }
     start();
@@ -770,35 +958,56 @@ if (typeof document !== 'undefined') (() => {
     req.onsuccess = req.onerror = req.onblocked = () => { if (msg) alert(msg); location.replace(location.pathname); };
   }
 
-  // ----- wiring -----
-  $('#back').onclick = () => { show('vList'); renderList(); };
+  // ----- invite / add / settings -----
+  async function openInvite() {
+    show('vInvite', 'Invite');
+    const link = inviteLink();
+    $('#inviteLink').value = link;
+    renderQR($('#inviteQR'), link);
+  }
+  $('#inviteBtn').onclick = openInvite;
+  $('#settingsInviteBtn').onclick = openInvite;
+  $('#copyBtn').onclick = async () => { try { await navigator.clipboard.writeText($('#inviteLink').value); toast('Invite link copied'); } catch { $('#inviteLink').select(); } };
+  $('#shareBtn').onclick = () => navigator.share
+    ? navigator.share({ title: 'Chat with me on Hush Relay', text: 'Here\'s my private chat invite:', url: $('#inviteLink').value }).catch(() => {})
+    : $('#copyBtn').click();
+  $('#addLinkBtn').onclick = () => { show('vAdd', 'Add a contact'); $('#addIn').value = ''; };
+  $('#addBtn').onclick = () => { const v = $('#addIn').value.trim(); if (v) handleCode(v); };
+  $('#addScanBtn').onclick = openScanner;
   $('#scanBtn').onclick = openScanner;
+  $('#settingsScanBtn').onclick = openScanner;
+  $('#back').onclick = () => { if (!$('#vSafety').hidden && current) return openChat(current); goHome(); };
   $('#scanFile').onchange = async e => {
     const f = e.target.files[0]; e.target.value = ''; if (!f) return;
     try {
       const bmp = await createImageBitmap(f);
       const t = await decodeQR(bmp, bmp.width, bmp.height);
-      if (!t) return alert('No QR code found in that picture');
+      if (!t) return alert('No code found in that picture');
       stopScanner(); handleCode(t);
     } catch { alert('Could not read that picture'); }
   };
-  $('#scanCancel').onclick = () => { show('vList'); renderList(); };
+  $('#scanCancel').onclick = goHome;
   $('#settingsBtn').onclick = async () => {
     show('vSettings', 'Settings');
-    const link = inviteLink();
-    $('#inviteLink').value = link;
-    renderQR($('#inviteQR'), link);
-    $('#myFp').textContent = (await contactId(me.pub)).match(/.{4}/g).join(' ');
+    paintAvatar($('#meAvatar'), me.name, me.pub);
+    $('#meName').textContent = me.name;
+    $('#myFp').textContent = (await contactId(me.pub)).slice(0, 16).match(/.{4}/g).join(' ');
     $('#myRelay').textContent = me.relay;
+    $('#myCalls').textContent = me.calls ? 'Available' : 'Not supported by this relay';
+    $('#myJoin').textContent = me.join || 'None (open relay)';
     renderRecovery();
   };
-  $('#copyBtn').onclick = async () => { try { await navigator.clipboard.writeText($('#inviteLink').value); status('Copied'); setTimeout(() => status(''), 1500); } catch { $('#inviteLink').select(); } };
-  $('#shareBtn').onclick = () => navigator.share ? navigator.share({ text: $('#inviteLink').value }).catch(() => {}) : $('#copyBtn').click();
+  $('#saveJoinBtn').onclick = async () => {
+    const code = $('#newJoinIn').value.trim(); if (!code) return;
+    const r = await fetch(me.relay + '?a=join', { method: 'POST', headers: TP, body: JSON.stringify({ s: me.secret, code }) }).catch(() => null);
+    if (!r || !r.ok) return alert(r && r.status === 403 ? 'That join code was not accepted.' : 'Could not reach your relay.');
+    me.join = code; await kvSet('me', me); $('#myJoin').textContent = code; $('#newJoinIn').value = ''; toast('Join code saved');
+  };
   $('#exportBtn').onclick = async () => {
     const p1 = $('#bp1').value, p2 = $('#bp2').value;
     if (p1.length < 12) return alert('Use a passphrase of at least 12 characters');
-    if (p1 !== p2) return alert('Passphrases do not match');
-    status('Encrypting backup…');
+    if (p1 !== p2) return alert('Passphrases don\'t match');
+    toast('Encrypting backup…', 0);
     try {
       const text = await exportBackup(me, [...contacts.values()], p1);
       const a = document.createElement('a');
@@ -807,52 +1016,84 @@ if (typeof document !== 'undefined') (() => {
       document.body.append(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 10000);
       $('#bp1').value = $('#bp2').value = '';
-      status('');
-    } catch (e) { status(''); alert('Backup failed: ' + e.message); }
+      toast('Backup downloaded');
+    } catch (e) { toast(''); alert('Backup failed: ' + e.message); }
   };
   $('#wipeBtn').onclick = () => {
     if (confirm('Erase your identity, contacts and messages from this device? Without recovery words or a backup this cannot be undone.')) wipe();
   };
-  $('#addBtn').onclick = () => { const v = $('#addIn').value; $('#addIn').value = ''; handleCode(v); };
-  $('#composer').onsubmit = e => { e.preventDefault(); const t = $('#txt').value; $('#txt').value = ''; send(t); };
-  $('#txt').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#composer').requestSubmit(); } };
+  $('#composer').onsubmit = e => { e.preventDefault(); const t = $('#txt').value; $('#txt').value = ''; $('#txt').style.height = ''; send(t); };
+  $('#txt').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && !/Android|Mobi/.test(navigator.userAgent)) { e.preventDefault(); $('#composer').requestSubmit(); } };
+  $('#txt').oninput = e => { const t = e.target; t.style.height = ''; t.style.height = Math.min(t.scrollHeight, 140) + 'px'; };
+
+  // ----- sign up -----
+  let setupInfo = null;
+  async function prepareSetup() {
+    const relay = $('#relayIn').value.trim() || defaultRelay();
+    setupInfo = await relayInfo(relay);
+    const fromInvite = pendingInvite && pendingInvite.j;
+    $('#joinWrap').hidden = !setupInfo.invite || !!fromInvite;
+    if (fromInvite) $('#joinIn').value = pendingInvite.j;
+    document.body.dataset.setup = 'ready';
+  }
+  $('#relayIn').onchange = prepareSetup;
   $('#createBtn').onclick = async () => {
     const name = $('#nameIn').value.trim(), relay = $('#relayIn').value.trim();
-    if (!name) return alert('Enter a name');
+    if (!name) return alert('Enter your name');
     if (!isRelay(relay)) return alert('Relay must be an https:// or .onion address');
-    status('Checking relay…');
-    const ok = await checkRelay(relay); status('');
-    if (!ok && !confirm('That relay did not answer like a Hush relay. Use it anyway?')) return;
-    me = await newIdentity(name, relay);
-    await kvSet('me', me);
-    start();
+    $('#createBtn').disabled = true;
+    try {
+      const info = await relayInfo(relay);
+      if (!info.ok && !confirm('That relay didn\'t answer like a Hush relay. Use it anyway?')) return;
+      const draft = await newIdentity(name, relay);
+      if (info.invite) {
+        const code = $('#joinIn').value.trim();
+        if (!code) { $('#joinWrap').hidden = false; return alert('This relay is invite-only. Enter its join code, or open an invite link from someone who uses it.'); }
+        const r = await fetch(relay + '?a=join', { method: 'POST', headers: TP, body: JSON.stringify({ s: draft.secret, code }) });
+        if (r.status === 403) { $('#joinWrap').hidden = false; return alert('That join code was not accepted.'); }
+        if (!r.ok) return alert('Could not join the relay (' + r.status + '). Try again.');
+        draft.join = code;
+      }
+      draft.calls = info.calls;
+      draft.inviteTok = b64e(rand(12));
+      me = draft;
+      await kvSet('me', me);
+      start();
+      if (pendingInvite) {
+        const inv = pendingInvite; pendingInvite = null;
+        try { const c = await addFromInvite(inv.raw); openChat(c.id); } catch (e) { alert(e.message); }
+      }
+    } finally { $('#createBtn').disabled = false; }
   };
   $('#restoreBtn').onclick = async () => {
     const f = $('#restoreFile').files[0], pass = $('#restorePass').value;
     if (!f || !pass) return alert('Choose a backup file and enter its passphrase');
-    status('Decrypting backup…');
+    toast('Decrypting backup…', 0);
     let data;
     try {
       const [tag, s, d] = (await f.text()).trim().split('.');
       if (!/^HUSH[23]$/.test(tag)) throw 0;
       data = JSON.parse(dec.decode(await aesDec(await passKey(pass, b64d(s)), b64d(d), enc.encode('hush-backup'))));
-    } catch { status(''); return alert('Could not open the backup: wrong passphrase or damaged file'); }
+    } catch { toast(''); return alert('Could not open the backup: wrong passphrase or damaged file'); }
     try { await adopt(data); } catch (e) { alert(e.message); }
-    status('');
+    toast('');
   };
 
   async function handleHash() {
     const h = location.hash;
     if (!/^#(i|link)=/.test(h)) return;
     history.replaceState(null, '', location.pathname);
-    if (/^#link=/.test(h)) return alert('To move your account, open Scan in the app and scan the code shown on the new device.');
+    if (/^#link=/.test(h)) return alert('To move your profile, open Scan in the app and scan the code shown on the new device.');
     handleCode(h);
   }
 
   function start() {
-    show('vList'); renderList(); handleHash();
+    goHome(); handleHash();
     if (started) return; started = true;
     liveLoop();
+    relayInfo(me.relay).then(async info => { // keep call support up to date
+      if (info.ok && info.calls !== !!me.calls) { me.calls = info.calls; await kvSet('me', me); }
+    });
   }
 
   (async () => {
@@ -861,21 +1102,36 @@ if (typeof document !== 'undefined') (() => {
     // IPFS path gateways (gateway.example/ipfs/<cid>/) put every IPFS site on one origin,
     // so any of them could read this app's storage. Only run on an origin of our own.
     if (/^\/(ipfs|ipns)\//.test(location.pathname)) {
-      document.body.textContent = 'Open Hush from its own domain or a subdomain gateway (https://<cid>.ipfs.dweb.link/). ' +
+      document.body.textContent = 'Open Hush Relay from its own domain or a subdomain gateway (https://<cid>.ipfs.dweb.link/). ' +
         'Path-style IPFS gateways share storage with every other IPFS site, which would expose your keys.';
       return;
     }
-    if (!window.isSecureContext || !crypto.subtle) { document.body.textContent = 'Hush needs HTTPS.'; return; }
+    if (!window.isSecureContext || !crypto.subtle) { document.body.textContent = 'Hush Relay needs a secure (https) connection.'; return; }
     db = await openDB();
     me = await kvGet('me');
     for (const c of (await tx('contacts', 'readonly', s => s.getAll())) || []) contacts.set(c.id, c);
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-    if (me) return start();
+    if ('serviceWorker' in navigator && !/HushRelayAndroid/.test(navigator.userAgent)) navigator.serviceWorker.register('sw.js').catch(() => {});
+    if (me) {
+      if (!me.inviteTok) { me.inviteTok = b64e(rand(12)); await kvSet('me', me); }
+      return start();
+    }
     $('#relayIn').value = defaultRelay();
     show('vSetup');
-    if (/^#link=/.test(location.hash)) {
+    if (/^#i=/.test(location.hash)) {
+      // Opened from an invite before having a profile: create one, then they're added automatically.
+      try {
+        const o = readInvite(location.hash);
+        pendingInvite = Object.assign({ raw: location.hash }, o);
+        paintAvatar($('#invitedAvatar'), o.n, o.p);
+        $('#invitedName').textContent = String(o.n || 'Someone').slice(0, 40);
+        $('#invitedBy').hidden = false;
+      } catch {}
       history.replaceState(null, '', location.pathname);
-      alert('This is a request to move an account onto a new device. Open it (or scan it) on the device that already has your account.');
+    } else if (/^#link=/.test(location.hash)) {
+      history.replaceState(null, '', location.pathname);
+      alert('This is a request to move a profile onto a new device. Open it (or scan it) on the device that already has your profile.');
     }
+    prepareSetup();
+    $('#nameIn').focus();
   })();
 })();

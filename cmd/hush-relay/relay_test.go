@@ -636,8 +636,8 @@ func TestInviteOnly(t *testing.T) {
 	if rec, _ := do(h, call{url: "/relay.php?a=put&box=" + box, body: blob(100)}); rec.Code != 404 {
 		t.Errorf("put to non-member = %d", rec.Code)
 	}
-	if rec, _ := do(h, call{url: "/relay.php?a=get", body: `{"s":"` + s + `"}`}); rec.Code != 403 {
-		t.Errorf("get by non-member = %d", rec.Code)
+	if rec, _ := do(h, call{url: "/relay.php?a=get", body: `{"s":"` + s + `"}`}); rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != "[]" {
+		t.Errorf("get by non-member should be an empty mailbox, got %d %s", rec.Code, rec.Body)
 	}
 	if rec, _ := do(h, call{url: "/relay.php?a=join", body: `{"s":"` + s + `","code":"wrong"}`}); rec.Code != 403 {
 		t.Errorf("wrong code = %d", rec.Code)
