@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math/big"
 	"net"
 	"net/http"
@@ -54,9 +55,14 @@ const (
 	// Onion mode: Tor hides client addresses, so limits are keyed per mailbox
 	// (and a few are global) instead of per client.
 	onionPutsPerBoxMin = 120
+	onionPutsTotalMin  = 3000
 	onionSlotsPerDay   = 50
 	onionLivePerBox    = 2
 	onionLiveTotal     = 2000
+	// Resource caps that protect small devices (phones, Pis).
+	maxBusy     = 128     // requests reading or writing bodies at the same time
+	maxDeliver  = 2 << 20 // raw bytes of mail returned per get; the app fetches the rest next
+	maxCounters = 200000  // rate-limit windows tracked at once; beyond this, new ones are refused
 )
 
 // Relay holds configuration and in-memory state. Pending mail lives on disk;
@@ -77,6 +83,12 @@ type Relay struct {
 	salt    [16]byte
 	saltDay string
 	stripes [256]sync.Mutex // per-mailbox write locks, striped by box id
+
+	fwdHeader string        // header a trusted proxy uses to report the client address
+	busy      chan struct{} // semaphore for body-heavy work
+	quit      chan struct{} // closed on shutdown so waiting long-polls answer at once
+	quitOnce  sync.Once
+	torHint   sync.Once
 }
 
 type counter struct {
@@ -92,6 +104,7 @@ func NewRelay(data string, trusted []string, onion bool) (*Relay, error) {
 		trusted: map[string]bool{}, onion: onion, now: time.Now,
 		waiters: map[string][]chan struct{}{}, live: map[string]int{},
 		counts: map[string]counter{}, known: map[string]time.Time{},
+		fwdHeader: "X-Forwarded-For", busy: make(chan struct{}, maxBusy), quit: make(chan struct{}),
 	}
 	for _, t := range trusted {
 		if t = strings.TrimSpace(t); t != "" {
@@ -173,27 +186,65 @@ func isLoopback(ip string) bool {
 	return p != nil && p.IsLoopback()
 }
 
-// clientIP returns the real client address. Forwarded headers are trusted only
-// when the request comes from a local proxy/tunnel or a configured proxy.
-// ok is false when the address can't tell clients apart (e.g. Tor).
+// Close makes waiting long-polls answer immediately; used on shutdown.
+func (r *Relay) Close() { r.quitOnce.Do(func() { close(r.quit) }) }
+
+// SetForwardedHeader chooses the header a trusted proxy uses to report the
+// client address: X-Forwarded-For (last hop) or e.g. CF-Connecting-IP.
+func (r *Relay) SetForwardedHeader(h string) {
+	if h = strings.TrimSpace(h); h != "" {
+		r.fwdHeader = http.CanonicalHeaderKey(h)
+	}
+}
+
+// clientIP returns the real client address. The forwarded header is trusted only
+// from a configured proxy, or from a local proxy/tunnel when not in onion mode
+// (behind Tor every connection is local and any header is client-supplied).
+// distinct is false when the address can't tell clients apart.
 func (r *Relay) clientIP(req *http.Request) (ip string, distinct bool) {
 	remote, _, err := net.SplitHostPort(req.RemoteAddr)
 	if err != nil {
 		remote = req.RemoteAddr
 	}
-	if !isLoopback(remote) && !r.trusted[remote] {
-		return remote, true
+	local := isLoopback(remote)
+	if !r.trusted[remote] && (!local || r.onion) {
+		return remote, !local
 	}
-	if cf := strings.TrimSpace(req.Header.Get("CF-Connecting-IP")); net.ParseIP(cf) != nil {
-		return cf, true
-	}
-	if xff := req.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		if last := strings.TrimSpace(parts[len(parts)-1]); net.ParseIP(last) != nil {
-			return last, true
+	if v := req.Header.Get(r.fwdHeader); v != "" {
+		if r.fwdHeader == "X-Forwarded-For" {
+			parts := strings.Split(v, ",")
+			v = parts[len(parts)-1] // the hop our own proxy added
+		}
+		if v = strings.TrimSpace(v); net.ParseIP(v) != nil {
+			return v, true
 		}
 	}
-	return remote, false
+	if local && !r.onion {
+		r.torHint.Do(func() {
+			log.Printf("note: requests arrive from %s with no %s header; if this relay is behind Tor, restart it with -onion", remote, r.fwdHeader)
+		})
+	}
+	return remote, !local
+}
+
+// acquire reserves a slot for body-heavy work. Short bursts queue for up to five
+// seconds; after that the relay answers 503 so the client retries later.
+func (r *Relay) acquire(w http.ResponseWriter) (release func(), ok bool) {
+	select {
+	case r.busy <- struct{}{}:
+		return func() { <-r.busy }, true
+	default:
+	}
+	t := time.NewTimer(5 * time.Second)
+	defer t.Stop()
+	select {
+	case r.busy <- struct{}{}:
+		return func() { <-r.busy }, true
+	case <-t.C:
+		w.Header().Set("Retry-After", "2")
+		fail(w, 503, "busy")
+		return nil, false
+	}
 }
 
 // clientKey hashes the client address with a daily salt; nothing identifying is kept.
@@ -219,7 +270,10 @@ func (r *Relay) allow(name, key string, window time.Duration, max int) bool {
 	k := name + "|" + key + "|" + strconv.FormatInt(slot, 10)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	c := r.counts[k]
+	c, seen := r.counts[k]
+	if !seen && len(r.counts) >= maxCounters {
+		return false // fail closed rather than grow without bound
+	}
 	c.n++
 	c.exp = (slot + 1) * secs
 	r.counts[k] = c
@@ -369,9 +423,12 @@ func (r *Relay) put(w http.ResponseWriter, req *http.Request, box string) {
 		return
 	}
 	key, distinct := r.clientKey(req)
-	allowed := r.allow("put", key, time.Minute, putsPerMin)
+	var allowed bool
 	if !distinct && r.onion {
-		allowed = r.allow("put-box", box, time.Minute, onionPutsPerBoxMin)
+		allowed = r.allow("put-all", "onion", time.Minute, onionPutsTotalMin) &&
+			r.allow("put-box", box, time.Minute, onionPutsPerBoxMin)
+	} else {
+		allowed = r.allow("put", key, time.Minute, putsPerMin)
 	}
 	if !allowed {
 		fail(w, 429, "slow down")
@@ -381,6 +438,11 @@ func (r *Relay) put(w http.ResponseWriter, req *http.Request, box string) {
 		fail(w, 507, "relay storage full")
 		return
 	}
+	release, ok := r.acquire(w)
+	if !ok {
+		return
+	}
+	defer release()
 	body, err := io.ReadAll(io.LimitReader(req.Body, maxBlob+1))
 	if err != nil || len(body) < minBlob || len(body) > maxBlob {
 		fail(w, 413, "bad size")
@@ -413,7 +475,7 @@ func (r *Relay) put(w http.ResponseWriter, req *http.Request, box string) {
 }
 
 func (r *Relay) get(w http.ResponseWriter, req *http.Request, box, waitArg string) {
-	wait, _ := strconv.Atoi(waitArg)
+	wait := leadingInt(waitArg) // like PHP's (int) cast: "5abc" -> 5
 	wait = max(0, min(maxWait, wait))
 	if wait > 0 {
 		key, distinct := r.clientKey(req)
@@ -471,6 +533,10 @@ func (r *Relay) get(w http.ResponseWriter, req *http.Request, box, waitArg strin
 			done()
 			r.deliver(w, box, nil)
 			return
+		case <-r.quit: // shutting down: answer now so the client reconnects elsewhere
+			done()
+			r.deliver(w, box, nil)
+			return
 		case <-req.Context().Done():
 			done()
 			return
@@ -478,19 +544,58 @@ func (r *Relay) get(w http.ResponseWriter, req *http.Request, box, waitArg strin
 	}
 }
 
+// deliver streams pending mail as a JSON array without holding it in memory.
+// It stops after maxGet envelopes or about maxDeliver bytes; the app asks again
+// for the rest straight after acknowledging these.
 func (r *Relay) deliver(w http.ResponseWriter, box string, ids []string) {
-	out := make([]envelope, 0, min(len(ids), maxGet))
+	w.Header().Set("Content-Type", "application/json")
+	if len(ids) == 0 {
+		_, _ = io.WriteString(w, "[]\n")
+		return
+	}
+	release, ok := r.acquire(w)
+	if !ok {
+		return
+	}
+	defer release()
+	_, _ = io.WriteString(w, "[")
+	sent, total := 0, int64(0)
 	for _, id := range ids {
-		b, err := os.ReadFile(filepath.Join(r.boxDir(box), id+".m"))
+		f, err := os.Open(filepath.Join(r.boxDir(box), id+".m"))
 		if err != nil {
 			continue
 		}
-		out = append(out, envelope{ID: id, D: base64.StdEncoding.EncodeToString(b)})
-		if len(out) >= maxGet {
+		info, err := f.Stat()
+		if err != nil || (sent > 0 && total+info.Size() > maxDeliver) {
+			f.Close()
+			break
+		}
+		if sent > 0 {
+			_, _ = io.WriteString(w, ",")
+		}
+		// ids are 22 hex characters and base64 needs no JSON escaping.
+		_, _ = io.WriteString(w, `{"id":"`+id+`","d":"`)
+		enc := base64.NewEncoder(base64.StdEncoding, w)
+		_, _ = io.Copy(enc, f)
+		_ = enc.Close()
+		f.Close()
+		_, _ = io.WriteString(w, `"}`)
+		sent++
+		total += info.Size()
+		if sent >= maxGet {
 			break
 		}
 	}
-	writeJSON(w, http.StatusOK, out)
+	_, _ = io.WriteString(w, "]\n")
+}
+
+// leadingInt parses leading decimal digits, ignoring the rest (PHP-style).
+func leadingInt(s string) int {
+	n := 0
+	for i := 0; i < len(s) && i < 9 && s[i] >= '0' && s[i] <= '9'; i++ {
+		n = n*10 + int(s[i]-'0')
+	}
+	return n
 }
 
 func (r *Relay) ack(w http.ResponseWriter, box string, in map[string]any) {
@@ -512,15 +617,22 @@ type slotRecord struct {
 }
 
 func (r *Relay) slot(w http.ResponseWriter, req *http.Request, a string) {
+	release, ok := r.acquire(w)
+	if !ok {
+		return
+	}
 	in := readJSON(req, maxSlot+4096)
+	release() // the body is read; locks below are held only briefly
 	l, ok := strArg(in, "l", 32)
 	if !ok {
 		fail(w, 400, "bad l")
 		return
 	}
 	path := filepath.Join(r.recover, l+".json")
-	unlock := r.lockBox("recover|" + l)
-	defer unlock()
+	if a != "rget" { // reads need no lock: slots are replaced by atomic rename
+		unlock := r.lockBox("recover|" + l)
+		defer unlock()
+	}
 	var rec slotRecord
 	raw, err := os.ReadFile(path)
 	exists := err == nil
@@ -605,7 +717,9 @@ func (r *Relay) Sweep() {
 				_ = os.Remove(filepath.Join(dir, f.Name()))
 			}
 		}
-		_ = os.Remove(dir) // only succeeds when empty
+		unlock := r.lockBox(e.Name()) // not while a put is creating this folder
+		_ = os.Remove(dir)            // only succeeds when empty
+		unlock()
 	}
 	slots, _ := os.ReadDir(r.recover)
 	for _, f := range slots {

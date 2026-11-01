@@ -28,8 +28,11 @@ go build -trimpath -ldflags "-s -w" -o hush-relay ./cmd/hush-relay
 | `-web` | `HUSH_WEB` | built in | Serve the app from a folder instead (for example a custom `config.js`). |
 | `-trusted-proxies` | `HUSH_TRUSTED_PROXIES` | none | Proxy IPs on other machines allowed to report client addresses. |
 | `-onion` | `HUSH_ONION=1` | off | Tor mode: limits apply per mailbox, because Tor hides client addresses. |
+| `-forwarded-header` | `HUSH_FORWARDED_HEADER` | `X-Forwarded-For` | Header your proxy uses for the client address. Use `CF-Connecting-IP` behind Cloudflare Tunnel. |
 
 It answers at `/relay.php` (so invites made for the PHP relay keep working) and at `/relay`. It refuses to start if the data folder is inside a served folder.
+
+It protects small devices on its own: at most 128 uploads or deliveries are handled at once (short bursts wait, then get "busy, retry"), each fetch returns at most about 2 MiB of mail (the app collects the rest automatically), and on shutdown (Ctrl-C or `systemctl stop`) waiting connections are answered before it exits.
 
 **Moving from the PHP relay:** stop PHP, point `-data` at the same folder (your old `HUSH_DATA`), start `hush-relay`. Waiting mail and recovery backups carry over.
 
@@ -42,7 +45,7 @@ It answers at `/relay.php` (so invites made for the PHP relay keep working) and 
 
 `scripts/serve.sh` already does this for you (it uses `~/.hush-relay-data`).
 
-**Built-in abuse limits** (both relays; for PHP, edit the constants at the top of `relay.php`): 120 deliveries per minute per client, 5 new recovery backups per client per day, 500 messages or 8 MiB waiting per mailbox, 6 live connections per client. The relay also stops accepting data when less than 256 MiB of disk is free. Limits use the real client address: requests from a proxy or tunnel on the same machine (Cloudflare Tunnel, Caddy, nginx) are trusted to report it automatically. A proxy on another machine needs `HUSH_TRUSTED_PROXIES=<its IP>`.
+**Built-in abuse limits** (both relays; for PHP, edit the constants at the top of `relay.php`): 120 deliveries per minute per client, 5 new recovery backups per client per day, 500 messages or 8 MiB waiting per mailbox, 6 live connections per client. The relay also stops accepting data when less than 256 MiB of disk is free. Limits use the real client address: requests from a proxy or tunnel on the same machine (Cloudflare Tunnel, Caddy, nginx) are trusted to report it automatically. A proxy on another machine needs `HUSH_TRUSTED_PROXIES=<its IP>`. Only one header is read: `X-Forwarded-For` by default, or the one named in `HUSH_FORWARDED_HEADER` (use `CF-Connecting-IP` behind Cloudflare Tunnel).
 
 **Live mode and capacity.** Every open copy of the app keeps one request waiting at the relay for up to 20 seconds. The Go relay handles this without tuning. For the PHP relay, make sure your server allows enough simultaneous PHP workers: `serve.sh` defaults to 32, and shared hosts often cap this lower.
 
@@ -67,7 +70,7 @@ sudo cat /var/lib/tor/hush/hostname      # your address: <56 characters>.onion
 ```
 
 - **Back up `/var/lib/tor/hush/`.** It holds the onion address's private key: lose it and the address is gone; leak it and someone else can impersonate your relay.
-- **Always use `-onion`.** Behind Tor every visitor appears as 127.0.0.1. Without it, one abusive visitor could use up the limits for everyone. With it, limits apply per mailbox.
+- **Always use `-onion`.** Behind Tor every visitor appears as 127.0.0.1. Without it, one abusive visitor could use up the limits for everyone. With it, limits apply per mailbox and forwarded-address headers from visitors are ignored.
 - **Who can reach it:** people open `http://<address>.onion/` in **Tor Browser** (desktop or Android). Tor encrypts and authenticates the connection, and the app accepts v3 onion relay addresses.
 - **Limit to know about:** Tor Browser forgets site data when it closes, which includes your identity keys. Turn on **recovery words** and sign back in with them each session, or offer both an onion address and a normal `https://` address so people can choose. A native client with Tor built in is on the roadmap to remove this limit.
 - The "Safest" security level in Tor Browser turns JavaScript off, so the app can't run at that level.

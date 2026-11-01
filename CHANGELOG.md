@@ -7,6 +7,10 @@
   - Builds for Linux (x86, ARM, ARMv7), Android, Windows, macOS and FreeBSD
   - Anti-framing headers, dotfile/data/source protection, refuses a data folder inside the served folder
 - Tor onion-service mode (`-onion`): limits apply per mailbox because Tor hides client addresses
+- Independent review of the Go relay: 4 confirmed issues and 9 smaller ones fixed with regression tests
+  (onion limit bypass via forwarded headers, a lock stall on recovery lookups, memory exhaustion via large
+  deliveries on small devices, abrupt shutdown); deliveries are now streamed and capped at about 2 MiB
+- Both relays read a single configurable forwarded-address header (`X-Forwarded-For` by default)
 - App accepts v3 `.onion` relay addresses over `http://`
 - Self-hosting guide: Go relay, Tor onion service, hardened systemd unit
 - Tests: Go unit tests (race detector), shared suite and four-browser run against both relays

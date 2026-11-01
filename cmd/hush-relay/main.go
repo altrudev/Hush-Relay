@@ -45,6 +45,7 @@ func main() {
 	webDir := flag.String("web", os.Getenv("HUSH_WEB"), "serve the app from this folder instead of the built-in copy")
 	trusted := flag.String("trusted-proxies", os.Getenv("HUSH_TRUSTED_PROXIES"), "comma-separated proxy IPs allowed to report client addresses (local ones are trusted automatically)")
 	onion := flag.Bool("onion", os.Getenv("HUSH_ONION") == "1", "Tor onion-service mode: limits apply per mailbox because Tor hides client addresses")
+	fwd := flag.String("forwarded-header", envOr("HUSH_FORWARDED_HEADER", "X-Forwarded-For"), "header your proxy uses to report the client address (CF-Connecting-IP for Cloudflare Tunnel)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 	if *showVersion {
@@ -60,15 +61,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("data folder: %v", err)
 	}
+	relay.SetForwardedHeader(*fwd)
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           newMux(relay, site),
+		Handler:           newMux(relay, site, *webDir == ""),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
-		WriteTimeout:      maxWait*time.Second + 20*time.Second, // long-polls hold for up to 20 s
+		WriteTimeout:      90 * time.Second, // covers a slow 60 s upload or a 20 s long-poll plus delivery
 		IdleTimeout:       90 * time.Second,
 		MaxHeaderBytes:    16 << 10,
 	}
+	srv.RegisterOnShutdown(relay.Close) // waiting long-polls answer at once
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -94,15 +97,19 @@ func main() {
 		mode = ", onion mode"
 	}
 	log.Printf("hush-relay %s on http://%s/ (data: %s%s)", version, ln.Addr(), *data, mode)
+	stopped := make(chan struct{})
 	go func() {
+		defer close(stopped)
 		<-ctx.Done()
-		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		log.Print("shutting down")
+		sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = srv.Shutdown(sctx)
+		_ = srv.Shutdown(sctx) // finishes requests in flight before returning
 	}()
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+	<-stopped
 }
 
 func envOr(k, def string) string {
@@ -118,11 +125,11 @@ func siteFS(dir, data string) (fs.FS, error) {
 	if dir == "" {
 		return web.Files, nil
 	}
-	absWeb, err := filepath.Abs(dir)
+	absWeb, err := realPath(dir)
 	if err != nil {
 		return nil, err
 	}
-	absData, err := filepath.Abs(data)
+	absData, err := realPath(data)
 	if err != nil {
 		return nil, err
 	}
@@ -132,10 +139,30 @@ func siteFS(dir, data string) (fs.FS, error) {
 	return os.DirFS(absWeb), nil
 }
 
+// realPath resolves symlinks in the longest existing part of p, so a data folder
+// reached through a link into the served folder is still recognised.
+func realPath(p string) (string, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
+	rest := ""
+	for cur := abs; ; cur = filepath.Dir(cur) {
+		if real, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(real, rest), nil
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return abs, nil
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+	}
+}
+
 // newMux routes the relay API and the app. The relay answers at /relay.php so
 // invites and builds made for the PHP relay keep working, and at /relay.
-func newMux(relay *Relay, site fs.FS) http.Handler {
-	static := newStatic(site)
+func newMux(relay *Relay, site fs.FS, fixed bool) http.Handler {
+	static := newStatic(site, fixed)
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		switch req.URL.Path {
 		case "/relay.php", "/relay":
@@ -151,8 +178,13 @@ type staticFiles struct {
 	etag map[string]string
 }
 
-func newStatic(site fs.FS) *staticFiles {
+// newStatic serves the app. ETags are computed once for the built-in copy only;
+// files served from disk (-web) may change, so they rely on modification times.
+func newStatic(site fs.FS, fixed bool) *staticFiles {
 	s := &staticFiles{fs: site, etag: map[string]string{}}
+	if !fixed {
+		return s
+	}
 	_ = fs.WalkDir(site, ".", func(p string, d fs.DirEntry, err error) error {
 		if err == nil && !d.IsDir() {
 			if b, err := fs.ReadFile(site, p); err == nil {

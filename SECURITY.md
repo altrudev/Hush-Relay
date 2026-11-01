@@ -81,3 +81,15 @@ The same reviewer re-tested every fix. The replay, cryptography, input, invite, 
 | 18 | Low | A data folder elsewhere under the document root passed the exposure check | Also checked against the server's document root |
 | 19 | Low | The largest allowed account didn't fit the relay's limits | Limits raised; a worst-case 500-contact account is tested |
 | 20 | Low | Message requests could fill the contact limit and block real new contacts | Requests capped separately (200, oldest dropped); a Delete button for requests |
+
+### 2026-11-01: Go relay review
+
+A separate reviewer tested the new Go relay against the same threat model, with working exploits. Fixed, each with a regression test:
+
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| 21 | High | In onion mode, visitor-supplied forwarded-address headers bypassed the per-mailbox limits | Onion mode ignores all visitor headers; one configurable header elsewhere |
+| 22 | High | Recovery-slot misses slept while holding a lock shared with deliveries, stalling them | Lookups take no lock |
+| 23 | High on small devices | Parallel fetches of a full mailbox could push memory past 2 GB | Streamed responses capped at about 2 MiB; at most 128 heavy requests at once |
+| 24 | Medium | Shutdown cut off requests in flight | Waiting connections are answered, then the relay exits |
+| 25 | Low | Smaller items: onion-wide budgets, bounded counters, a rare race in cleanup, stale cache tags with `-web`, timeouts, symlinked data folders, `CF-Connecting-IP` trusted without being chosen (also in the PHP relay) | Fixed |

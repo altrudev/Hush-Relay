@@ -74,8 +74,13 @@ function client_ip() {
     $remote = $_SERVER['REMOTE_ADDR'] ?? '';
     $trusted = array_filter(array_map('trim', explode(',', (string)(getenv('HUSH_TRUSTED_PROXIES') ?: (defined('HUSH_TRUSTED_PROXIES') ? HUSH_TRUSTED_PROXIES : '')))));
     if (!preg_match('/^(127\.|::1$|::ffff:127\.)/', $remote) && !in_array($remote, $trusted, true)) return $remote;
-    $cf = $_SERVER['HTTP_CF_CONNECTING_IP'] ?? '';
-    if (is_string($cf) && filter_var($cf, FILTER_VALIDATE_IP)) return $cf;
+    // Which header the proxy uses: X-Forwarded-For (default) or e.g. CF-Connecting-IP.
+    // Only the chosen one is read, so clients can't pick a header the proxy passes through.
+    $hdr = strtoupper(str_replace('-', '_', (string)(getenv('HUSH_FORWARDED_HEADER') ?: (defined('HUSH_FORWARDED_HEADER') ? HUSH_FORWARDED_HEADER : 'X-Forwarded-For'))));
+    if ($hdr !== 'X_FORWARDED_FOR') {
+        $v = trim((string)($_SERVER['HTTP_' . $hdr] ?? ''));
+        return filter_var($v, FILTER_VALIDATE_IP) ? $v : $remote;
+    }
     $xff = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? '';
     if (is_string($xff) && $xff !== '') {
         $last = trim(substr(strrchr(',' . $xff, ','), 1)); // the hop our proxy added

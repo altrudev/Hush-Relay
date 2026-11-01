@@ -38,7 +38,7 @@ func newTestRelay(t *testing.T, onion bool) (*Relay, http.Handler) {
 		"img/a.svg":     {Data: []byte("<svg/>")},
 		"manifest.json": {Data: []byte("{}")},
 	}
-	return r, newMux(r, site)
+	return r, newMux(r, site, true)
 }
 
 type call struct {
@@ -413,5 +413,169 @@ func TestDataInsideWebRefused(t *testing.T) {
 	}
 	if _, err := siteFS(filepath.Join(dir, "web"), filepath.Join(dir, "web..data")); err != nil {
 		t.Fatalf("sibling with similar name refused: %v", err)
+	}
+}
+
+// ---- regressions from the independent review ---------------------------------
+
+func TestOnionIgnoresClientSuppliedForwardedHeaders(t *testing.T) {
+	_, h := newTestRelay(t, true)
+	refused := 0
+	for i := 0; i < onionSlotsPerDay+10; i++ {
+		rec, _ := do(h, call{url: "/relay.php?a=rput", body: fmt.Sprintf(`{"l":"%032x","t":"%s","d":"x"}`, 5000+i, secret(2)),
+			remote: "127.0.0.1:1", hdr: map[string]string{"X-Forwarded-For": fmt.Sprintf("10.9.%d.%d", i/250, i%250), "CF-Connecting-IP": fmt.Sprintf("10.8.0.%d", i%250)}})
+		if rec.Code == 429 {
+			refused++
+		}
+	}
+	if refused != 10 {
+		t.Fatalf("spoofed headers bypassed onion slot limit: refused %d of 10 extra", refused)
+	}
+	codes := make([]int, 5)
+	var wg sync.WaitGroup
+	s := secret(777)
+	do(h, call{url: "/relay.php?a=put&box=" + boxOf(s), body: blob(100), remote: "127.0.0.1:1"})
+	rec, _ := do(h, call{url: "/relay.php?a=get", body: `{"s":"` + s + `"}`, remote: "127.0.0.1:1"})
+	var items []envelope
+	_ = json.Unmarshal(rec.Body.Bytes(), &items)
+	do(h, call{url: "/relay.php?a=ack", body: `{"s":"` + s + `","ids":["` + items[0].ID + `"]}`, remote: "127.0.0.1:1"})
+	for i := range codes {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			rec, _ := do(h, call{url: "/relay.php?a=get&wait=1", body: `{"s":"` + s + `"}`, remote: "127.0.0.1:1",
+				hdr: map[string]string{"X-Forwarded-For": fmt.Sprintf("10.7.0.%d", i)}})
+			codes[i] = rec.Code
+		}(i)
+	}
+	wg.Wait()
+	n := 0
+	for _, c := range codes {
+		if c == 429 {
+			n++
+		}
+	}
+	if n != 3 {
+		t.Fatalf("spoofed headers bypassed per-mailbox live cap: %v", codes)
+	}
+}
+
+func TestForwardedHeaderChoice(t *testing.T) {
+	r, _ := newTestRelay(t, false)
+	req := httptest.NewRequest("POST", "/relay.php", nil)
+	req.RemoteAddr = "127.0.0.1:1"
+	req.Header.Set("CF-Connecting-IP", "1.1.1.1")
+	req.Header.Set("X-Forwarded-For", "2.2.2.2")
+	if ip, _ := r.clientIP(req); ip != "2.2.2.2" {
+		t.Errorf("default should use X-Forwarded-For, got %s", ip)
+	}
+	r.SetForwardedHeader("cf-connecting-ip")
+	if ip, _ := r.clientIP(req); ip != "1.1.1.1" {
+		t.Errorf("CF-Connecting-IP when chosen, got %s", ip)
+	}
+}
+
+func TestRecoveryMissesDoNotStallDelivery(t *testing.T) {
+	_, h := newTestRelay(t, false)
+	var wg sync.WaitGroup
+	for i := 0; i < 400; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			do(h, call{url: "/relay.php?a=rget", body: fmt.Sprintf(`{"l":"%032x"}`, 90000+i)})
+		}(i)
+	}
+	time.Sleep(20 * time.Millisecond)
+	worst := time.Duration(0)
+	for i := 0; i < 20; i++ {
+		start := time.Now()
+		do(h, call{url: "/relay.php?a=put&box=" + boxOf(secret(i)), body: blob(100)})
+		if d := time.Since(start); d > worst {
+			worst = d
+		}
+	}
+	wg.Wait()
+	if worst > 50*time.Millisecond {
+		t.Fatalf("puts stalled behind recovery lookups: worst %v", worst)
+	}
+}
+
+func TestDeliveryIsCappedAndStreamed(t *testing.T) {
+	r, h := newTestRelay(t, false)
+	s := secret(888)
+	box := boxOf(s)
+	_ = os.MkdirAll(r.boxDir(box), 0o700)
+	for i := 0; i < 16; i++ { // 16 x 500 KB written directly (bypassing put limits)
+		_ = os.WriteFile(filepath.Join(r.boxDir(box), fmt.Sprintf("%010d%012x.m", 1790000000+i, i)), bytes.Repeat([]byte{byte(i)}, 500_000), 0o600)
+	}
+	rec, _ := do(h, call{url: "/relay.php?a=get", body: `{"s":"` + s + `"}`})
+	var items []envelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil {
+		t.Fatalf("streamed JSON invalid: %v", err)
+	}
+	if len(items) == 0 || len(items) > maxDeliver/500_000 {
+		t.Fatalf("delivered %d items of 500 KB, cap is %d bytes", len(items), maxDeliver)
+	}
+	if items[0].ID != "1790000000000000000000" {
+		t.Fatalf("wrong order: first id %s", items[0].ID)
+	}
+	// One oversized envelope is still delivered on its own.
+	big := secret(889)
+	_ = os.MkdirAll(r.boxDir(boxOf(big)), 0o700)
+	_ = os.WriteFile(filepath.Join(r.boxDir(boxOf(big)), "1790000000aaaaaaaaaaaa.m"), make([]byte, maxDeliver+10), 0o600)
+	rec, _ = do(h, call{url: "/relay.php?a=get", body: `{"s":"` + big + `"}`})
+	if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil || len(items) != 1 {
+		t.Fatalf("oversized envelope not delivered alone: %v %d", err, len(items))
+	}
+}
+
+func TestCloseAnswersWaitingLongPolls(t *testing.T) {
+	r, h := newTestRelay(t, false)
+	s := secret(31)
+	do(h, call{url: "/relay.php?a=put&box=" + boxOf(s), body: blob(100)})
+	rec, _ := do(h, call{url: "/relay.php?a=get", body: `{"s":"` + s + `"}`})
+	var items []envelope
+	_ = json.Unmarshal(rec.Body.Bytes(), &items)
+	do(h, call{url: "/relay.php?a=ack", body: `{"s":"` + s + `","ids":["` + items[0].ID + `"]}`})
+	done := make(chan string)
+	go func() {
+		rec, _ := do(h, call{url: "/relay.php?a=get&wait=20", body: `{"s":"` + s + `"}`})
+		done <- strings.TrimSpace(rec.Body.String())
+	}()
+	time.Sleep(200 * time.Millisecond)
+	r.Close()
+	select {
+	case body := <-done:
+		if body != "[]" {
+			t.Fatalf("got %q", body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("long-poll still waiting after Close")
+	}
+}
+
+func TestMiscReviewFixes(t *testing.T) {
+	if leadingInt("5abc") != 5 || leadingInt("abc") != 0 || leadingInt("99999999999999") != 999999999 {
+		t.Error("leadingInt should behave like PHP (int)")
+	}
+	r, _ := newTestRelay(t, false)
+	for i := 0; i < maxCounters; i++ {
+		r.counts[fmt.Sprint(i)] = counter{n: 1, exp: time.Now().Add(time.Hour).Unix()}
+	}
+	if r.allow("put", "new-client", time.Minute, 100) {
+		t.Error("counter table full: new windows must be refused")
+	}
+	// Data folder reached through a symlink into the served folder.
+	dir := t.TempDir()
+	webDir := filepath.Join(dir, "web")
+	_ = os.MkdirAll(filepath.Join(webDir, "store"), 0o700)
+	if err := os.Symlink(filepath.Join(webDir, "store"), filepath.Join(dir, "link")); err == nil {
+		if _, err := siteFS(webDir, filepath.Join(dir, "link", "data")); err == nil {
+			t.Error("symlinked data folder inside web accepted")
+		}
+	}
+	// ETags only for the fixed built-in copy.
+	if len(newStatic(fstest.MapFS{"a.js": {Data: []byte("x")}}, false).etag) != 0 {
+		t.Error("disk-served files must not get startup ETags")
 	}
 }

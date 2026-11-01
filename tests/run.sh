@@ -62,6 +62,17 @@ if [ "$IMPL" = go ]; then
   # A data folder inside a served folder must be refused at startup.
   if "$TMP/hush-relay" -addr "localhost:$((PORT+1))" -web web -data web/data >"$TMP/refuse.log" 2>&1; then echo "  FAIL started with data inside web/"; exit 1; fi
   grep -q "inside the served folder" "$TMP/refuse.log" && [ ! -d web/data ] && echo "  ok   relay refuses to run with an exposed data folder" || { echo "  FAIL: $(cat "$TMP/refuse.log")"; exit 1; }
+  # Graceful shutdown: a waiting long-poll is answered with [] and the process exits cleanly.
+  "$TMP/hush-relay" -addr "localhost:$((PORT+2))" -data "$TMP/data2" >"$TMP/stop.log" 2>&1 &
+  SPID=$!; sleep 0.5
+  sec=$(head -c32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+  sbox=$(printf '%s' "$sec" | sha256sum | cut -c1-32)
+  curl -s -o /dev/null -X POST "http://localhost:$((PORT+2))/relay.php?a=put&box=$sbox" --data-binary @web/icon.svg
+  ids=$(curl -s -X POST "http://localhost:$((PORT+2))/relay.php?a=get" -d "{\"s\":\"$sec\"}" | grep -o '"id":"[0-9a-f]*"' | cut -d'"' -f4)
+  curl -s -o /dev/null -X POST "http://localhost:$((PORT+2))/relay.php?a=ack" -d "{\"s\":\"$sec\",\"ids\":[\"$ids\"]}"
+  ( curl -s -X POST "http://localhost:$((PORT+2))/relay.php?a=get&wait=15" -d "{\"s\":\"$sec\"}" > "$TMP/lp.out"; echo "rc=$?" >> "$TMP/lp.out" ) &
+  LP=$!; sleep 0.6; kill -TERM $SPID; wait $LP; wait $SPID; rc=$?
+  grep -q '^\[\]' "$TMP/lp.out" && grep -q 'rc=0' "$TMP/lp.out" && [ $rc = 0 ] && echo "  ok   graceful shutdown answers waiting long-polls" || { echo "  FAIL shutdown: $(cat "$TMP/lp.out") exit=$rc"; exit 1; }
   for p in relay.php embed.go .htaccess; do
     code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$PORT/$p")
     [ "$code" = 405 ] || [ "$code" = 404 ] && echo "  ok   GET /$p gives $code" || { echo "  FAIL /$p returned $code"; exit 1; }
