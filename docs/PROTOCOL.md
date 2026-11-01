@@ -37,7 +37,7 @@ The construction follows Signal's Double Ratchet specification, without header e
 
 Message bodies are JSON: `{t: "msg", id, txt, ts}` or `{t: "reset", id, ts}`. A reset is sent after an account moves to a new device, because ratchet state never travels.
 
-## Relay API (`relay.php`, all POST)
+## Relay API (all POST, at `/relay.php`; the Go relay also answers at `/relay`)
 
 | Action | Request | Result |
 |---|---|---|

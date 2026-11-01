@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 (2026-11-01): Go relay and Tor onion services
+- New Go relay: one self-contained binary with the app built in, Go standard library only
+  - Same API and data layout as `relay.php`; the two can share a data folder
+  - In-memory long-poll wake-ups: 3,000 simultaneous live connections tested at about 80 MB
+  - Builds for Linux (x86, ARM, ARMv7), Android, Windows, macOS and FreeBSD
+  - Anti-framing headers, dotfile/data/source protection, refuses a data folder inside the served folder
+- Tor onion-service mode (`-onion`): limits apply per mailbox because Tor hides client addresses
+- App accepts v3 `.onion` relay addresses over `http://`
+- Self-hosting guide: Go relay, Tor onion service, hardened systemd unit
+- Tests: Go unit tests (race detector), shared suite and four-browser run against both relays
+
 ## 0.3.0 (2026-10-31): first public release
 - Live delivery (long-polling), messages arrive in about a second
 - QR invites; scan with the camera or from a picture

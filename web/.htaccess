@@ -8,3 +8,4 @@
   Options -Indexes
 </IfModule>
 RedirectMatch 404 ^.*/(data|relay\.config\.php)(/.*)?$
+RedirectMatch 404 \.go$

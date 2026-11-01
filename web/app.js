@@ -45,6 +45,9 @@ function isRelay(r) {
   let u; try { u = new URL(r); } catch { return false; }
   if (u.username || u.password || u.hash || u.search) return false;
   if (u.protocol === 'https:') return true;
+  // Tor onion services (v3) are reached over http://, but Tor itself encrypts and
+  // authenticates the connection end to end, so they count as secure.
+  if (u.protocol === 'http:' && /^[a-z2-7]{56}\.onion$/.test(u.hostname)) return true;
   const localApp = typeof location === 'undefined' || /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
   return u.protocol === 'http:' && /^(localhost|127\.0\.0\.1)$/.test(u.hostname) && localApp;
 }
@@ -672,7 +675,7 @@ if (typeof document !== 'undefined') (() => {
   let pairing = null;
   $('#pairBtn').onclick = async () => {
     const relay = $('#relayIn').value.trim() || defaultRelay();
-    if (!isRelay(relay)) return alert('Relay must be an https:// URL');
+    if (!isRelay(relay)) return alert('Relay must be an https:// or .onion address');
     const kp = await genKP(), secret = hex(rand(32)), box = (await sha(secret)).slice(0, 32);
     const url = location.origin + location.pathname + '#link=' + b64e(enc.encode(JSON.stringify({ r: relay, b: box, e: kp.pub })));
     const my = pairing = { kp, until: Date.now() + 10 * 60000 };
@@ -816,7 +819,7 @@ if (typeof document !== 'undefined') (() => {
   $('#createBtn').onclick = async () => {
     const name = $('#nameIn').value.trim(), relay = $('#relayIn').value.trim();
     if (!name) return alert('Enter a name');
-    if (!isRelay(relay)) return alert('Relay must be an https:// URL');
+    if (!isRelay(relay)) return alert('Relay must be an https:// or .onion address');
     status('Checking relay…');
     const ok = await checkRelay(relay); status('');
     if (!ok && !confirm('That relay did not answer like a Hush relay. Use it anyway?')) return;

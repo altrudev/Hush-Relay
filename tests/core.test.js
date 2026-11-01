@@ -139,6 +139,11 @@ async function auditRegressions(){
   ok(!H.isRelay('http://localhost:@evil.com/relay.php'),'credential trick refused');
   ok(!H.isRelay('https://user:pw@evil.com/relay.php'),'credentials refused');
   ok(!H.isRelay('javascript:alert(1)'),'non-http scheme refused');
+  const onion='http://'+'abcdefghijklmnopqrstuvwxyz234567'.repeat(2).slice(0,56)+'.onion/relay.php';
+  ok(H.isRelay(onion),'v3 onion relay accepted over http');
+  ok(!H.isRelay('http://short.onion/relay.php'),'malformed onion refused');
+  ok(!H.isRelay('http://'+'a'.repeat(56)+'.onion.evil.com/relay.php'),'onion look-alike refused');
+  ok(!H.isRelay('http://evil.com/relay.php'),'plain http refused');
   // Unanswered requests stay out of the recovery bundle.
   const bundle=await H.backupData(A,[{pub:B.pub,box:B.box,relay:R,name:'Bob'},{pub:C.pub,box:C.box,relay:R,name:'spam',request:true}]);
   ok(bundle.contacts.length===1,'message requests left out of backups');

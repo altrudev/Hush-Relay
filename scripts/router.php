@@ -25,7 +25,7 @@ if (preg_match('#/relay\.php$#', $path)) {
 if (substr($path, -1) === '/') $path .= 'index.html';
 $file = realpath($web . $path);
 if ($file === false || strpos($file, $web . DIRECTORY_SEPARATOR) !== 0 || !is_file($file)) return deny();
-if (preg_match('#\.php$#', $file)) return deny();                   // nothing else may execute
+if (preg_match('#\.(php|go)$#', $file)) return deny();               // no other code is executed or served
 
 $types = [
     'html' => 'text/html; charset=utf-8', 'js' => 'text/javascript; charset=utf-8',

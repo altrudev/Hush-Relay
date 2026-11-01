@@ -2,22 +2,34 @@
 # Hush Relay — Copyright (C) 2026 Valentyn Rukhaylo (ALTRU.dev) and contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Run the full test suite against a throwaway relay.
-#   ./tests/run.sh          # core tests (needs php + node 20+)
-#   ./tests/run.sh --e2e    # also the multi-browser test (needs python3 + playwright + chromium)
+#   ./tests/run.sh               # PHP relay: core tests (needs php + node 20+)
+#   ./tests/run.sh --go          # Go relay instead (needs go 1.22+)
+#   add --e2e for the multi-browser test (needs python3 + playwright + chromium)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+IMPL=php; E2E=0
+for arg in "$@"; do case "$arg" in --go) IMPL=go;; --e2e) E2E=1;; esac; done
 PORT="${PORT:-8099}"
 TMP="$(mktemp -d)"
 export HUSH_DATA="$TMP/data"
-export PHP_CLI_SERVER_WORKERS=16
-php -S "localhost:$PORT" -t web scripts/router.php >"$TMP/server.log" 2>&1 &
+if [ "$IMPL" = go ]; then
+  echo "== go build, vet, unit tests"
+  test -z "$(gofmt -l cmd web)" && echo "  ok   gofmt" || { echo "  FAIL gofmt: $(gofmt -l cmd web)"; exit 1; }
+  go vet ./... && echo "  ok   go vet"
+  go test ./... 2>&1 | sed 's/^/  /'
+  go build -o "$TMP/hush-relay" ./cmd/hush-relay && echo "  ok   build"
+  "$TMP/hush-relay" -addr "localhost:$PORT" -data "$HUSH_DATA" >"$TMP/server.log" 2>&1 &
+else
+  export PHP_CLI_SERVER_WORKERS=16
+  php -S "localhost:$PORT" -t web scripts/router.php >"$TMP/server.log" 2>&1 &
+fi
 PID=$!
 trap 'kill $PID 2>/dev/null; rm -rf "$TMP"' EXIT
 for _ in $(seq 50); do curl -s -o /dev/null "http://localhost:$PORT/index.html" && break; sleep 0.1; done
 
 echo "== syntax"
-php -l web/relay.php >/dev/null && echo "  ok   relay.php"
+{ command -v php >/dev/null && php -l web/relay.php >/dev/null && echo "  ok   relay.php"; } || [ "$IMPL" = go ]
 node --check web/app.js && echo "  ok   app.js"
 bash -n scripts/*.sh && echo "  ok   shell scripts"
 
@@ -27,7 +39,7 @@ RELAY="http://localhost:$PORT/relay.php" node tests/core.test.js
 echo "== server hardening"
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://localhost:$PORT/relay.php?a=put&box=0123456789abcdef0123456789abcdef" --data-binary @web/icon.svg)
 [ "$code" = 200 ] && echo "  ok   relay accepts mail" || { echo "  FAIL relay put ($code)"; exit 1; }
-for p in data/ data/recover/ .htaccess scripts/router.php; do
+for p in data/ data/recover/ .htaccess scripts/router.php embed.go; do
   code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$PORT/$p")
   [ "$code" = 404 ] && echo "  ok   /$p not served" || { echo "  FAIL /$p returned $code"; exit 1; }
 done
@@ -46,6 +58,15 @@ live() { curl -s -o /dev/null -w '%{http_code} ' -H "X-Forwarded-For: $1" -X POS
 burst=$( (for i in 1 2 3 4 5 6 7 8; do live 198.51.100.7 & done; wait) )
 sleep 0.3; otherip=$(live 203.0.113.9)
 echo "$burst" | grep -q 429 && [ "$otherip" = "200 " ] && echo "  ok   live connections capped per client behind a proxy ($burst| other client: $otherip)" || { echo "  FAIL per-client live cap ($burst| other: $otherip)"; exit 1; }
+if [ "$IMPL" = go ]; then
+  # A data folder inside a served folder must be refused at startup.
+  if "$TMP/hush-relay" -addr "localhost:$((PORT+1))" -web web -data web/data >"$TMP/refuse.log" 2>&1; then echo "  FAIL started with data inside web/"; exit 1; fi
+  grep -q "inside the served folder" "$TMP/refuse.log" && [ ! -d web/data ] && echo "  ok   relay refuses to run with an exposed data folder" || { echo "  FAIL: $(cat "$TMP/refuse.log")"; exit 1; }
+  for p in relay.php embed.go .htaccess; do
+    code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$PORT/$p")
+    [ "$code" = 405 ] || [ "$code" = 404 ] && echo "  ok   GET /$p gives $code" || { echo "  FAIL /$p returned $code"; exit 1; }
+  done
+else
 # Requests that really come from outside cannot spoof X-Forwarded-For (only loopback proxies are trusted).
 grep -q "preg_match('/^(127" web/relay.php && echo "  ok   forwarded addresses trusted only from local proxies" || { echo "  FAIL proxy trust check missing"; exit 1; }
 # Without the router or HUSH_DATA, php -S must refuse rather than expose web/data.
@@ -55,10 +76,19 @@ sleep 0.5
 body=$(curl -s -X POST "http://localhost:$((PORT+1))/relay.php?a=get" -d '{}')
 kill $PID2 2>/dev/null
 echo "$body" | grep -q "HUSH_DATA" && [ ! -d web/data ] && echo "  ok   relay refuses to run with an exposed data folder" || { echo "  FAIL exposed data folder not refused: $body"; rm -rf web/data; exit 1; }
+fi
 
-if [ "${1:-}" = "--e2e" ]; then
+if [ "$E2E" = 1 ]; then
   echo "== browsers"
-  rm -rf "$HUSH_DATA/limits"   # the earlier stages used up this client's rate limits
+  # The earlier stages used up this client's rate limits; start from a clean slate.
+  if [ "$IMPL" = go ]; then
+    kill $PID 2>/dev/null; wait $PID 2>/dev/null || true
+    "$TMP/hush-relay" -addr "localhost:$PORT" -data "$HUSH_DATA" >>"$TMP/server.log" 2>&1 &
+    PID=$!
+    for _ in $(seq 50); do curl -s -o /dev/null "http://localhost:$PORT/index.html" && break; sleep 0.1; done
+  else
+    rm -rf "$HUSH_DATA/limits"
+  fi
   BASE="http://localhost:$PORT/index.html" python3 tests/e2e.py
 fi
 echo "All tests passed."

@@ -43,6 +43,7 @@ Please report privately through GitHub's **Report a vulnerability** button (the 
 - Behind a proxy on another machine, list it in `HUSH_TRUSTED_PROXIES` so limits apply per real client. Local proxies and tunnels are trusted automatically.
 - Keep anti-framing headers on: `web/.htaccess` (Apache) and `scripts/router.php` (`php -S`) send them. On Caddy or nginx, add `Content-Security-Policy: frame-ancestors 'none'`.
 - Turn off access logs you don't need.
+- Behind a Tor onion service, run the Go relay with `-onion`; otherwise every visitor shares one client identity for rate limits. Back up the onion service's key folder and keep it private.
 - Keep the host patched. For a phone relay, use a device that still gets security updates.
 
 ## Audit log
