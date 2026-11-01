@@ -151,7 +151,11 @@
     // ---- audio ----
     async setupAudio() {
       const ctx = this.ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
-      await ctx.audioWorklet.addModule('worklet.js');
+      // Without a working sound device the audio engine never starts; say so instead of hanging.
+      let timer;
+      await Promise.race([ctx.audioWorklet.addModule('worklet.js'),
+        new Promise((_, bad) => { timer = setTimeout(() => bad(new Error('Sound is not available on this device')), 8000); })])
+        .finally(() => clearTimeout(timer));
       const src = ctx.createMediaStreamSource(this.media);
       const cap = new AudioWorkletNode(ctx, 'hush-capture', { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 1, channelCountMode: 'explicit' });
       src.connect(cap);
