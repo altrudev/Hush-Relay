@@ -48,7 +48,10 @@ function isRelay(r) {
   // Tor onion services (v3) are reached over http://, but Tor itself encrypts and
   // authenticates the connection end to end, so they count as secure.
   if (u.protocol === 'http:' && /^[a-z2-7]{56}\.onion$/.test(u.hostname)) return true;
-  const localApp = typeof location === 'undefined' || /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+  // Plain-http relays on this machine only, for development: the app itself on localhost,
+  // or a debug build of the Android app (a release build never allows this).
+  const localApp = typeof location === 'undefined' || /^(localhost|127\.0\.0\.1)$/.test(location.hostname) ||
+    (typeof navigator !== 'undefined' && / HushRelayAndroid\/\S+ debug/.test(navigator.userAgent));
   return u.protocol === 'http:' && /^(localhost|127\.0\.0\.1)$/.test(u.hostname) && localApp;
 }
 const MAX_CLOCK_SKEW = 10 * 60000;

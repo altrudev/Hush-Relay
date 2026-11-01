@@ -94,7 +94,7 @@ public class MainActivity extends Activity {
         s.setJavaScriptCanOpenWindowsAutomatically(false);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         s.setSaveFormData(false);
-        s.setUserAgentString(s.getUserAgentString() + " HushRelayAndroid/0.5");
+        s.setUserAgentString(s.getUserAgentString() + " HushRelayAndroid/0.5" + (BuildConfig.DEBUG ? " debug" : ""));
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG);
 
         web.addJavascriptInterface(new Bridge(), "HushAndroid");
