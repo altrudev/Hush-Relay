@@ -20,7 +20,9 @@ The project includes third-party assets under their original license terms, **no
 | `web/vendor/jsQR.js` | [jsQR](https://github.com/cozmo/jsQR) | Apache License 2.0 | [LICENSE-jsQR.txt](web/vendor/LICENSE-jsQR.txt) |
 | `web/vendor/words.js` | BIP39 English wordlist sourced from [@scure/bip39](https://github.com/paulmillr/scure-bip39) | MIT | [LICENSE-bip39-wordlist.txt](web/vendor/LICENSE-bip39-wordlist.txt) |
 
-When redistributing the code, keep the relevant license text and copyright notices. These notices cover the identified bundled material and do not imply endorsement by its upstream authors.
+The Go relay binary (`cmd/hush-relay`) embeds the web app, including these files and their notice files, so a shared binary redistributes them too. The relay itself uses only the Go standard library (BSD-3-Clause, © The Go Authors), which is compiled into the binary.
+
+When redistributing the code or a binary, keep the relevant license text and copyright notices. These notices cover the identified bundled material and do not imply endorsement by its upstream authors.
 
 ## Warranty disclaimer
 
