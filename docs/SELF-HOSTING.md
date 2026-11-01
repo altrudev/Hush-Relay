@@ -29,10 +29,31 @@ go build -trimpath -ldflags "-s -w" -o hush-relay ./cmd/hush-relay
 | `-trusted-proxies` | `HUSH_TRUSTED_PROXIES` | none | Proxy IPs on other machines allowed to report client addresses. |
 | `-onion` | `HUSH_ONION=1` | off | Tor mode: limits apply per mailbox, because Tor hides client addresses. |
 | `-forwarded-header` | `HUSH_FORWARDED_HEADER` | `X-Forwarded-For` | Header your proxy uses for the client address. Use `CF-Connecting-IP` behind Cloudflare Tunnel. |
+| `-path` | `HUSH_PATH` | none | Private path for the app, relay and calls, e.g. `/k7q4mxp2/`. Every other address shows a plain front page. |
+| `-cover` | `HUSH_COVER` | built in | Your own HTML file for that front page. |
+| `-join-code` | `HUSH_JOIN_CODE` | none | Invite-only mode: only people with the code can get mail on this relay. It travels inside your invites. |
+| `-new-path` | | | Print a random `-path` and `-join-code` to use, then exit. |
 
 It answers at `/relay.php` (so invites made for the PHP relay keep working) and at `/relay`. It refuses to start if the data folder is inside a served folder.
 
 It protects small devices on its own: at most 128 uploads or deliveries are handled at once (short bursts wait, then get "busy, retry"), each fetch returns at most about 2 MiB of mail (the app collects the rest automatically), and on shutdown (Ctrl-C or `systemctl stop`) waiting connections are answered before it exits.
+
+### Private setup (recommended)
+
+Run your relay so that it looks like an ordinary website to everyone except the people you invite:
+
+```bash
+./hush-relay -new-path
+#   -path /k7q4mxp2ab/ -join-code 3f9c1e7a5b2d8c40
+./hush-relay -path /k7q4mxp2ab/ -join-code 3f9c1e7a5b2d8c40
+```
+
+- **The front page** (`https://relay.example.com/`) shows a plain "nothing here" page; any other address gives a normal 404. The app lives at `https://relay.example.com/k7q4mxp2ab/`. Open that, create your profile, and share invites from there.
+- **The join code** makes the relay invite-only. Your invites carry it, so people you invite never type it; strangers who find the address can't create a mailbox or store anything. Changing the code later doesn't remove people who already joined.
+- **Calls** go through the same HTTPS connection (`…/k7q4mxp2ab/live`), so to your network provider a call looks like any other secure connection to your server, much like a mainstream chat app talking to its servers. No peer-to-peer traffic, no extra ports.
+- Treat the path as a shared secret, not a password: it hides the app from scanners and casual visitors. Real protection comes from the encryption and the join code.
+
+**Calls and bandwidth.** A video call uses about 0.7 Mbit/s in each direction per person, all through the relay (so the relay's upload carries both directions of every call). A home connection or the smallest VPS handles a few calls at once. Calls need the Go relay; on the PHP relay the call buttons stay hidden.
 
 **Moving from the PHP relay:** stop PHP, point `-data` at the same folder (your old `HUSH_DATA`), start `hush-relay`. Waiting mail and recovery backups carry over.
 
@@ -76,7 +97,26 @@ sudo cat /var/lib/tor/hush/hostname      # your address: <56 characters>.onion
 - The "Safest" security level in Tor Browser turns JavaScript off, so the app can't run at that level.
 - Not yet tested end to end in Tor Browser by the maintainers; reports welcome.
 
-## Android phone
+## Android app
+
+People you invite can use the web app in any browser, or install the **Hush Relay Android app** (not in any app store):
+
+1. Download `hush-relay-<version>.apk` from the [releases page](https://github.com/altrudev/Hush-Relay/releases) and check it against the published SHA-256 and signing-certificate fingerprint.
+2. Open it on the phone and allow installing from that source when Android asks.
+3. On the welcome screen, paste the invite link someone sent you (or share the link to the Hush Relay app from your messenger), then create your profile.
+
+The app is the same code as the web app, bundled inside the APK so nothing is downloaded to run it; it only connects to the relays you use. It blocks screenshots and hides chats from the recent-apps preview, keeps your keys in app storage that other apps can't read, and excludes them from Android cloud backups. Like the web app, it receives messages while it's open; there are no push notifications yet.
+
+**Building it yourself** (no Gradle; the plain Android SDK tools):
+
+```bash
+./android/build.sh            # signed release APK in android/out/, plus a .sha256 file
+./android/build.sh --debug    # debug build: remote WebView inspector on, screenshots allowed
+```
+
+It needs a JDK 17+, Android build-tools 34+ and one platform (35+). The first release build creates a signing key at `~/.hush-relay/release.jks` (or `HUSH_KEYSTORE`). **Back that key up**: Android only installs updates signed with the same key. `tests/android/run.sh` runs a two-person test (app plus a browser, with a video call) on an emulator.
+
+## Android phone as the relay
 
 A spare phone on a charger and Wi-Fi works well for friends and family.
 
@@ -125,7 +165,7 @@ Description=Hush Relay
 After=network.target
 [Service]
 User=hush
-ExecStart=/usr/local/bin/hush-relay -addr 127.0.0.1:8080 -data /opt/hush/data
+ExecStart=/usr/local/bin/hush-relay -addr 127.0.0.1:8080 -data /opt/hush/data -path /k7q4mxp2ab/ -join-code 3f9c1e7a5b2d8c40
 Restart=always
 NoNewPrivileges=true
 ProtectSystem=strict

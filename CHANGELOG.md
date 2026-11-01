@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.0 (unreleased): calls, private relays and the Android app
+- **Encrypted voice and video calls** through your own relay
+  - WebCodecs (Opus 32 kbit/s, VP8 640×360 at 15 fps), audio worklets with a small jitter buffer, echo cancellation
+  - A fresh 32-byte key per call, sent inside the ratchet; one AES-GCM key per direction, strictly increasing sequence numbers
+  - Carried over the relay's HTTPS connection (a standard-library WebSocket at `/live`): no peer-to-peer link, no extra ports, no IP exposure between callers
+  - Ringing, decline, busy, missed-call and duration notes in the chat; audio-only fallback when the camera is refused
+- **Private relays** (Go relay)
+  - `-path` serves the app, relay and calls under a secret path, with a plain front page everywhere else (`-cover` for your own)
+  - `-join-code` makes the relay invite-only; invites carry the code so friends just tap the link
+  - `-new-path` prints a random path and join code
+- **Android app**: the web app bundled in a small APK (no app store, no Google services, no libraries)
+  - Served from a private origin inside the app; camera, microphone, file picker, share, copy and backup-save bridges
+  - Screenshots blocked and keys excluded from cloud backups in release builds; share an invite link to the app to open it
+  - Built with the plain SDK tools (`android/build.sh`); a two-person device test with a video call runs on an emulator
+- **Redesign**: light, professional interface; one-tap invites (link, share sheet or QR) that add both people as contacts; a paste-invite field on the welcome screen
+- Fetching from a mailbox that hasn't joined an invite-only relay answers like an empty mailbox (only sending is refused)
+- Tests: browser end-to-end run now covers invite links, an invite-only relay behind a private path and a full video call
+
 ## 0.4.0 (2026-11-01): Go relay and Tor onion services
 - New Go relay: one self-contained binary with the app built in, Go standard library only
   - Same API and data layout as `relay.php`; the two can share a data folder
