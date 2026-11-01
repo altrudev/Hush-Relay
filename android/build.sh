@@ -50,9 +50,13 @@ javac -nowarn -Xlint:-options --release 11 -classpath "$PLATFORM" -d "$B/classes
 "$BT/zipalign" -f -p 4 "$B/base.apk" "$B/aligned.apk"
 
 if $DEBUG; then
-  KS="$B/debug.jks"; PASS=android
-  keytool -genkeypair -keystore "$KS" -storepass "$PASS" -keypass "$PASS" -alias debug -keyalg EC -groupname secp256r1 \
-    -validity 365 -dname "CN=Hush Relay debug" >/dev/null 2>&1
+  # Kept between builds so a new debug build installs over the previous one.
+  KS="$HOME/.hush-relay/debug.jks"; PASS=android
+  if [[ ! -f "$KS" ]]; then
+    mkdir -p "$(dirname "$KS")"; chmod 700 "$(dirname "$KS")"
+    keytool -genkeypair -keystore "$KS" -storepass "$PASS" -keypass "$PASS" -alias debug -keyalg EC -groupname secp256r1 \
+      -validity 10000 -dname "CN=Hush Relay debug" >/dev/null 2>&1
+  fi
   APK="$OUT/hush-relay-$VERSION-debug.apk"
 else
   KS="${HUSH_KEYSTORE:-$HOME/.hush-relay/release.jks}"

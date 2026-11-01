@@ -11,11 +11,13 @@ cd "$(dirname "$0")/../.."
 SDK="${ANDROID_HOME:-$HOME/.local/android-sdk}"; ADB="$SDK/platform-tools/adb"
 S=(-s "${SERIAL:?set SERIAL to the device, e.g. emulator-5554}")
 PORT=8099; TMP="$(mktemp -d)"
-./android/build.sh --debug | tail -1
+./android/build.sh --debug | grep Built
 go build -o "$TMP/relay" ./cmd/hush-relay
 "$TMP/relay" -addr "127.0.0.1:$PORT" -data "$TMP/data" & RELAY_PID=$!
 trap 'kill $RELAY_PID 2>/dev/null; rm -rf "$TMP"' EXIT
-"$ADB" "${S[@]}" install -r -g android/out/hush-relay-*-debug.apk >/dev/null
+# A build signed with a different key can't update the installed app: replace it.
+"$ADB" "${S[@]}" install -r -g android/out/hush-relay-*-debug.apk >/dev/null 2>&1 || {
+  "$ADB" "${S[@]}" uninstall dev.altru.hushrelay >/dev/null; "$ADB" "${S[@]}" install -g android/out/hush-relay-*-debug.apk >/dev/null; }
 "$ADB" "${S[@]}" reverse tcp:$PORT tcp:$PORT >/dev/null
 # Two resizable windows, so both apps stay in the foreground (camera and microphone).
 "$ADB" "${S[@]}" shell settings put global enable_freeform_support 1
