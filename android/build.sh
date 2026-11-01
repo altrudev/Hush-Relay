@@ -38,7 +38,22 @@ package dev.altru.hushrelay;
 public final class BuildConfig { public static final boolean DEBUG = $DEBUG; }
 EOF
 
-"$BT/aapt2" compile --dir "$HERE/res" -o "$B/res.zip"
+# Release builds allow encrypted connections only. Debug builds may also reach a relay
+# on the device itself (localhost), for testing.
+cp -r "$HERE/res/." "$B/res/"
+if $DEBUG; then
+  cat > "$B/res/xml/network_security.xml" <<'XML'
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>
+XML
+fi
+"$BT/aapt2" compile --dir "$B/res" -o "$B/res.zip"
 DBG=(); $DEBUG && DBG=(--debug-mode)
 "$BT/aapt2" link -o "$B/base.apk" -I "$PLATFORM" --manifest "$HERE/AndroidManifest.xml" \
   -A "$B/assets" --java "$B/gen" --min-sdk-version 26 --target-sdk-version 35 "${DBG[@]}" "$B/res.zip"
@@ -62,16 +77,18 @@ else
   KS="${HUSH_KEYSTORE:-$HOME/.hush-relay/release.jks}"
   PASS="${HUSH_KEYPASS:-}"
   if [[ -z "$PASS" ]]; then read -rsp "Keystore password: " PASS; echo; fi
+  export HUSH_KEYPASS="$PASS"   # handed to the tools through the environment, never on the command line
   if [[ ! -f "$KS" ]]; then
     mkdir -p "$(dirname "$KS")"; chmod 700 "$(dirname "$KS")"
-    keytool -genkeypair -keystore "$KS" -storepass "$PASS" -keypass "$PASS" -alias hush -keyalg EC -groupname secp256r1 \
+    keytool -genkeypair -keystore "$KS" -storepass:env HUSH_KEYPASS -keypass:env HUSH_KEYPASS -alias hush -keyalg EC -groupname secp256r1 \
       -validity 10000 -dname "CN=Hush Relay" >/dev/null
     chmod 600 "$KS"
     echo "New signing key: $KS  (back it up; future updates need it)"
   fi
   APK="$OUT/hush-relay-$VERSION.apk"
 fi
-"$BT/apksigner" sign --ks "$KS" --ks-pass "pass:$PASS" --key-pass "pass:$PASS" --out "$APK" "$B/aligned.apk"
+if $DEBUG; then export HUSH_KEYPASS="$PASS"; fi
+"$BT/apksigner" sign --ks "$KS" --ks-pass env:HUSH_KEYPASS --key-pass env:HUSH_KEYPASS --out "$APK" "$B/aligned.apk"
 "$BT/apksigner" verify "$APK"
 rm -f "$APK.idsig"
 ( cd "$OUT" && sha256sum "$(basename "$APK")" > "$(basename "$APK").sha256" )

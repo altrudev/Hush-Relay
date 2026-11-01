@@ -1,10 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Encrypted connections only. The one exception is a relay on this phone itself
-     (localhost), which never leaves the device; the app only uses it in debug builds. -->
+<!-- Encrypted connections only. (Debug builds swap in a copy that also allows a relay
+     on the device itself; see build.sh.) -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">localhost</domain>
-        <domain includeSubdomains="false">127.0.0.1</domain>
-    </domain-config>
 </network-security-config>

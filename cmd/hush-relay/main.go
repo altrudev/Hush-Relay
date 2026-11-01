@@ -82,6 +82,12 @@ func main() {
 	}
 	relay.SetForwardedHeader(*fwd)
 	relay.SetJoinCode(*joinCode)
+	if *onion && *joinCode == "" {
+		log.Printf("note: behind Tor every visitor looks the same, so limits can't tell people apart; add -join-code to keep strangers from using this relay")
+	}
+	if *prefix != "" && *cover == "" {
+		log.Printf("note: the built-in front page is the same on every Hush relay; -cover with a page of your own makes this server harder to recognise")
+	}
 	srv := &http.Server{
 		Addr:              *addr,
 		Handler:           withPrefix(base, coverHTML, newMux(relay, site, *webDir == "")),

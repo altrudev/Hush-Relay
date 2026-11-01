@@ -105,3 +105,26 @@ A separate reviewer tested the new Go relay against the same threat model, with 
 | 23 | High on small devices | Parallel fetches of a full mailbox could push memory past 2 GB | Streamed responses capped at about 2 MiB; at most 128 heavy requests at once |
 | 24 | Medium | Shutdown cut off requests in flight | Waiting connections are answered, then the relay exits |
 | 25 | Low | Smaller items: onion-wide budgets, bounded counters, a rare race in cleanup, stale cache tags with `-web`, timeouts, symlinked data folders, `CF-Connecting-IP` trusted without being chosen (also in the PHP relay) | Fixed |
+
+### 2026-11-01: review of calls, private relays and the Android app
+
+A separate review of the 0.5.0 additions (call rooms, invite-only mode and private path, call encryption, the Android app), with working proofs where possible. Fixed before release, each with a regression test where it can be tested automatically:
+
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| 26 | High | In the Android app, a link from a web page, another app or a shared text could open the "move your profile" screen; one tap on Approve would have sent the profile to whoever made the link | Move codes are accepted only from Scan; links and shared text can't start a move |
+| 27 | Medium | Invite links from outside the app added the contact without asking, revealing your identity to whoever made the link | Asks "Add NAME as a contact?" first |
+| 28 | Medium | If a call ended while the camera or sound was still starting, the camera and microphone could stay on until the page reloaded | Checked after every wait during call setup; tracks are stopped |
+| 29 | Medium | One client could hold every call room (a fresh mailbox per room behind Tor; a whole IPv6 /64 elsewhere) | IPv6 clients grouped by /64; joins counted per client; Tor relays warned to use a join code, which is required to open a room |
+| 30 | Medium | A slow reader could make the relay buffer up to about 24 MB per connection | At most 1 MB queued per connection; media beyond that is dropped |
+| 31 | Low | A muted call with the camera off was dropped after 60 seconds | Answered pings keep a connection alive |
+| 32 | Low | A room could outlive its second person for up to 4 hours | The "alone" check repeats every 2 minutes |
+| 33 | Low | Wrong join codes could lock out people who had the right one (shared limit behind Tor, global limit elsewhere) | Only wrong codes count towards the limits |
+| 34 | Low | Message requests (strangers) could ring you, and a call address only had to match the host | Calls only from accepted contacts, at exactly their relay's call address |
+| 35 | Low | The release keystore password was visible in the process list while signing | Passed through the environment |
+| 36 | Info | Release builds allowed plain-http connections to localhost | Only debug builds do |
+| 37 | Info | The built-in front page is identical on every relay | Startup note recommends `-cover` |
+| 38 | Info | Fragmented or oversized control frames were accepted; text frames weren't counted against the bandwidth limit | Rejected; every frame counts |
+
+Checked and found sound: WebSocket frame-length limits and masking, room isolation and 256-bit room ids, private-path normalisation (case, `//`, dot segments, encoded slashes), member file naming and constant-time code checks, per-direction call keys with no nonce reuse, the Android asset server, permission and intent handling.
+

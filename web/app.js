@@ -758,8 +758,9 @@ if (typeof document !== 'undefined') (() => {
     if (msg.t === 'call') {
       if (Date.now() - (msg.ts || 0) > 60000) return note(c, 'Missed ' + kind);
       // Only join calls hosted on the caller's own relay, so a message can't send us anywhere else.
+      if (c.request) return note(c, 'Missed ' + kind + ' (reply to accept this person first)');
       let ok = false;
-      try { const u = new URL(msg.live), r = new URL(c.relay); ok = u.host === r.host && /^wss?:$/.test(u.protocol) && isHex(msg.room, 64) && typeof msg.key === 'string'; } catch {}
+      try { ok = msg.live === liveURL(c.relay) && isHex(msg.room, 64) && typeof msg.key === 'string'; } catch {}
       if (!ok) return note(c, 'Ignored a call with an unexpected address');
       if (activeCall || !HushCall.supported()) {
         post(c, { t: 'call-decline', id: msg.id, busy: true, ts: Date.now() }).catch(() => {});
@@ -1071,7 +1072,7 @@ if (typeof document !== 'undefined') (() => {
   // The Android app hands over links shared to it or opened with it.
   window.hushOpen = text => {
     text = String(text || '');
-    if (me) return handleCode(text).catch(e => alert(e.message));
+    if (me) return openFromOutside(text);
     if (/#i=/.test(text) && setupInvite(text)) prepareSetup();
     else if (/#link=/.test(text)) alert('This is a request to move a profile onto a new device. Open it (or scan it) on the device that already has your profile.');
   };
@@ -1121,8 +1122,21 @@ if (typeof document !== 'undefined') (() => {
     const h = location.hash;
     if (!/^#(i|link)=/.test(h)) return;
     history.replaceState(null, '', location.pathname);
-    if (/^#link=/.test(h)) return alert('To move your profile, open Scan in the app and scan the code shown on the new device.');
-    handleCode(h);
+    openFromOutside(h);
+  }
+  // A link opened from outside (a web page, another app, a shared text) is never
+  // trusted like a code you scanned yourself: move requests are refused outright
+  // (they hand over your whole profile), and invites are added only if you say so.
+  async function openFromOutside(text) {
+    if (/#link=/.test(text)) return alert('To move your profile, open Scan in the app and scan the code shown on the new device.');
+    if (!/#i=/.test(text)) return;
+    let o; try { o = readInvite(text); } catch (e) { return alert(e.message); }
+    const name = String(o.n || 'Someone').slice(0, 40);
+    if (o.p === me.pub) return;
+    const known = [...contacts.values()].find(c => c.pub === o.p);
+    if (known) return openChat(known.id);
+    if (!confirm('Add ' + name + ' as a contact? They will be able to message and call you.')) return;
+    handleCode(text);
   }
 
   function start() {

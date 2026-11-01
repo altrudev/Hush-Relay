@@ -57,18 +57,34 @@
       const other = this.o.role === 'caller' ? 'callee' : 'caller';
       [this.kSend, this.kRecv] = await Promise.all([dirKey(raw, this.o.role), dirKey(raw, other)]);
       const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 };
+      // The call can end (hang-up, the other side cancels) while we wait for the camera
+      // or the audio engine. Check after each wait, and never leave the camera running.
+      const ended = () => {
+        if (this.state !== 'ended') return false;
+        if (this.media) this.media.getTracks().forEach(t => t.stop());
+        try { this.ctx && this.ctx.close(); } catch {}
+        return true;
+      };
+      const grab = async c => {
+        const m = await navigator.mediaDevices.getUserMedia(c);
+        if (this.state === 'ended') { m.getTracks().forEach(t => t.stop()); throw new Error('ended'); }
+        return m;
+      };
       try {
-        this.media = await navigator.mediaDevices.getUserMedia({ audio, video: this.o.video ? { width: W, height: H, frameRate: FPS } : false });
+        this.media = await grab({ audio, video: this.o.video ? { width: W, height: H, frameRate: FPS } : false });
       } catch (e) {
+        if (ended()) return;
         if (!this.o.video) throw new Error('Microphone permission is needed for calls');
-        this.media = await navigator.mediaDevices.getUserMedia({ audio }); // camera refused: carry on with voice
+        try { this.media = await grab({ audio }); } catch (e2) { if (ended()) return; throw e2; } // camera refused: carry on with voice
         this.camOff = true;
       }
+      if (ended()) return;
       if (this.o.localVideo && this.media.getVideoTracks().length) {
         this.o.localVideo.srcObject = this.media; this.o.localVideo.hidden = false;
         try { await this.o.localVideo.play(); } catch {}
       }
-      await this.setupAudio();
+      try { await this.setupAudio(); } catch (e) { if (ended()) return; throw e; }
+      if (ended()) return;
       this.connect();
     }
 

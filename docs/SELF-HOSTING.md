@@ -87,10 +87,11 @@ sudo apt install tor
 #   HiddenServicePort 80 127.0.0.1:8080
 sudo systemctl restart tor
 sudo cat /var/lib/tor/hush/hostname      # your address: <56 characters>.onion
-./hush-relay -onion                      # listens on 127.0.0.1:8080
+./hush-relay -onion -join-code <code>    # listens on 127.0.0.1:8080 (hush-relay -new-path makes a code)
 ```
 
 - **Back up `/var/lib/tor/hush/`.** It holds the onion address's private key: lose it and the address is gone; leak it and someone else can impersonate your relay.
+- **Add `-join-code` too.** Behind Tor every visitor looks the same, so limits can't tell people apart; the join code is what keeps strangers from using your relay (and from opening call rooms).
 - **Always use `-onion`.** Behind Tor every visitor appears as 127.0.0.1. Without it, one abusive visitor could use up the limits for everyone. With it, limits apply per mailbox and forwarded-address headers from visitors are ignored.
 - **Who can reach it:** people open `http://<address>.onion/` in **Tor Browser** (desktop or Android). Tor encrypts and authenticates the connection, and the app accepts v3 onion relay addresses.
 - **Limit to know about:** Tor Browser forgets site data when it closes, which includes your identity keys. Turn on **recovery words** and sign back in with them each session, or offer both an onion address and a normal `https://` address so people can choose. A native client with Tor built in is on the roadmap to remove this limit.

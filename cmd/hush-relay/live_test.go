@@ -22,25 +22,36 @@ import (
 
 // A minimal WebSocket client for tests (masks frames as browsers do).
 type testWS struct {
-	c  net.Conn
-	br *bufio.Reader
+	c    net.Conn
+	br   *bufio.Reader
+	pong bool // answer pings, as browsers do
 }
 
 func dialWS(t *testing.T, srv *httptest.Server, path string) *testWS {
 	t.Helper()
+	return dialWSFrom(t, srv, path, "")
+}
+
+// dialWSFrom connects as if forwarded for client address ip by a local proxy.
+func dialWSFrom(t *testing.T, srv *httptest.Server, path, ip string) *testWS {
+	t.Helper()
+	extra := ""
+	if ip != "" {
+		extra = "X-Forwarded-For: " + ip + "\r\n"
+	}
 	c, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	k := make([]byte, 16)
 	_, _ = rand.Read(k)
-	fmt.Fprintf(c, "GET %s HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n", path, base64.StdEncoding.EncodeToString(k))
+	fmt.Fprintf(c, "GET %s HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n%s\r\n", path, base64.StdEncoding.EncodeToString(k), extra)
 	br := bufio.NewReader(c)
 	resp, err := http.ReadResponse(br, nil)
 	if err != nil || resp.StatusCode != 101 {
 		t.Fatalf("handshake: %v %v", err, resp)
 	}
-	return &testWS{c, br}
+	return &testWS{c: c, br: br}
 }
 
 func (w *testWS) write(op byte, data []byte, masked bool) {
@@ -94,7 +105,12 @@ func (w *testWS) read(timeout time.Duration) (byte, []byte, error) {
 			return 0, nil, err
 		}
 		switch h[0] & 0x0f {
-		case 0x9, 0xA:
+		case 0x9:
+			if w.pong {
+				w.write(0xA, p, true)
+			}
+			continue
+		case 0xA:
 			continue
 		case 0x8:
 			return 0x8, nil, io.EOF
@@ -239,5 +255,83 @@ func TestBadHelloClosesQuickly(t *testing.T) {
 	}
 	if time.Since(start) > 12*time.Second {
 		t.Fatalf("silent connection lasted %v", time.Since(start))
+	}
+}
+
+// A muted call sends no media, but answering pings must keep it connected.
+func TestPongKeepsCallAlive(t *testing.T) {
+	r, srv := liveServer(t, "")
+	r.hub.idle, r.hub.ping = time.Second, 200*time.Millisecond
+	room := secret(9)
+	a := dialWS(t, srv, "/live")
+	a.json(map[string]string{"op": "open", "room": room, "s": secret(1)})
+	a.expectOp(t, "ready")
+	b := dialWS(t, srv, "/live")
+	b.json(map[string]string{"op": "join", "room": room})
+	b.expectOp(t, "ready")
+	a.expectOp(t, "peer")
+	a.pong, b.pong = true, true // both only answer pings: nobody sends media for 3 s
+	go func() { _, _, _ = a.read(10 * time.Second) }()
+	if _, _, err := b.read(3 * time.Second); !strings.Contains(fmt.Sprint(err), "timeout") {
+		t.Fatalf("muted side was disconnected: %v", err)
+	}
+	a.write(0x2, []byte("still here"), true)
+	if op, p, err := b.read(2 * time.Second); err != nil || op != 0x2 || string(p) != "still here" {
+		t.Fatalf("muted side lost the call: %v", err)
+	}
+}
+
+// Control frames must not be fragmented and carry at most 125 bytes.
+func TestControlFrameRules(t *testing.T) {
+	_, srv := liveServer(t, "")
+	for name, frame := range map[string][]byte{
+		"fragmented ping": {0x09, 0x80, 0, 0, 0, 0},
+		"long close":      append([]byte{0x88, 0x80 | 126, 0, 126, 0, 0, 0, 0}, make([]byte, 126)...),
+	} {
+		w := dialWS(t, srv, "/live")
+		_, _ = w.c.Write(frame)
+		if m := w.expectOp(t, "error"); m["msg"] != "bad hello" {
+			t.Errorf("%s: got %v", name, m)
+		}
+	}
+}
+
+// Each client may sit in a limited number of rooms as the one who joins, too.
+func TestJoinsPerClientLimit(t *testing.T) {
+	_, srv := liveServer(t, "")
+	var rooms []string
+	for i := 0; i <= roomsPerClient; i++ {
+		room := secret(300 + i)
+		o := dialWSFrom(t, srv, "/live", fmt.Sprintf("203.0.113.%d", 10+i))
+		o.json(map[string]string{"op": "open", "room": room, "s": secret(400 + i)})
+		o.expectOp(t, "ready")
+		rooms = append(rooms, room)
+	}
+	for i, room := range rooms {
+		j := dialWSFrom(t, srv, "/live", "198.51.100.7")
+		j.json(map[string]string{"op": "join", "room": room})
+		if i < roomsPerClient {
+			j.expectOp(t, "ready")
+		} else if m := j.expectOp(t, "error"); m["msg"] != "busy" {
+			t.Errorf("join beyond the limit: %v", m)
+		}
+	}
+}
+
+// A slow reader can't make the relay hold more than about wsOutBytes for it.
+func TestOutQueueByteBudget(t *testing.T) {
+	c := &wsConn{out: make(chan wsMsg, wsOutQueue), done: make(chan struct{})}
+	frame := make([]byte, 200<<10)
+	sent := 0
+	for i := 0; i < 50; i++ {
+		if c.send(0x2, frame) {
+			sent++
+		}
+	}
+	if q := c.queued.Load(); q > wsOutBytes || sent != wsOutBytes/len(frame) {
+		t.Fatalf("queued %d bytes in %d frames", q, sent)
+	}
+	if !c.send(0x9, nil) {
+		t.Fatal("control frames must still go out when media is being dropped")
 	}
 }

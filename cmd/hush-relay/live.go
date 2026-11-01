@@ -29,20 +29,26 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const (
 	wsGUID         = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-	wsMaxMessage   = 256 << 10        // largest frame the app sends (a video keyframe)
-	wsOutQueue     = 96               // messages buffered towards a slow peer before dropping
-	wsBytesPerSec  = 600 << 10        // per connection, about 4.8 Mbit/s sustained
-	wsBurst        = 2 << 20          // short bursts allowed above that
-	roomLifetime   = 4 * time.Hour    // longest call
-	roomAlone      = 2 * time.Minute  // a room with one person waiting closes after this
-	wsIdle         = 60 * time.Second // no data and no pong: close
-	maxRooms       = 500              // rooms on the relay at once
-	roomsPerClient = 4                // rooms one client (or one mailbox, behind Tor) may hold
+	wsMaxMessage   = 256 << 10       // largest frame the app sends (a video keyframe)
+	wsOutQueue     = 96              // messages buffered towards a slow peer before dropping
+	wsOutBytes     = 1 << 20         // ... and at most this many bytes of them
+	wsBytesPerSec  = 600 << 10       // per connection, about 4.8 Mbit/s sustained
+	wsBurst        = 2 << 20         // short bursts allowed above that
+	roomLifetime   = 4 * time.Hour   // longest call
+	roomAlone      = 2 * time.Minute // a room with one person waiting closes after this
+	maxRooms       = 500             // rooms on the relay at once
+	roomsPerClient = 4               // rooms one client (or one mailbox, behind Tor) may open, and may join
+)
+
+const (
+	wsIdle = 60 * time.Second // no data and no pong: close
+	wsPing = 20 * time.Second // how often the relay pings
 )
 
 type room struct {
@@ -60,6 +66,8 @@ type wsConn struct {
 	once   sync.Once
 	tokens float64
 	last   time.Time
+	queued atomic.Int64 // bytes waiting in out
+	ping   time.Duration
 }
 
 type wsMsg struct {
@@ -70,10 +78,15 @@ type wsMsg struct {
 type liveHub struct {
 	mu    sync.Mutex
 	rooms map[string]*room
-	owned map[string]int
+	owned map[string]int // rooms opened, per client
+	in    map[string]int // rooms joined, per client
+	idle  time.Duration  // wsIdle, shorter in tests
+	ping  time.Duration  // wsPing, shorter in tests
 }
 
-func newLiveHub() *liveHub { return &liveHub{rooms: map[string]*room{}, owned: map[string]int{}} }
+func newLiveHub() *liveHub {
+	return &liveHub{rooms: map[string]*room{}, owned: map[string]int{}, in: map[string]int{}, idle: wsIdle, ping: wsPing}
+}
 
 // ---- WebSocket framing (RFC 6455, server side) --------------------------------
 
@@ -89,7 +102,7 @@ func headerHas(h http.Header, name, token string) bool {
 }
 
 // upgrade completes the WebSocket handshake and takes over the connection.
-func upgrade(w http.ResponseWriter, req *http.Request) (*wsConn, error) {
+func upgrade(w http.ResponseWriter, req *http.Request, ping time.Duration) (*wsConn, error) {
 	key := req.Header.Get("Sec-WebSocket-Key")
 	if req.Method != http.MethodGet || !headerHas(req.Header, "Connection", "upgrade") ||
 		!headerHas(req.Header, "Upgrade", "websocket") || req.Header.Get("Sec-WebSocket-Version") != "13" {
@@ -115,7 +128,7 @@ func upgrade(w http.ResponseWriter, req *http.Request) (*wsConn, error) {
 		return nil, err
 	}
 	c := &wsConn{conn: conn, br: rw.Reader, out: make(chan wsMsg, wsOutQueue), done: make(chan struct{}),
-		tokens: wsBurst, last: time.Now()}
+		tokens: wsBurst, last: time.Now(), ping: ping}
 	go c.writer()
 	return c, nil
 }
@@ -165,17 +178,18 @@ func (c *wsConn) readMessage(timeout time.Duration) (op byte, data []byte, err e
 		for i := range payload {
 			payload[i] ^= mask[i%4]
 		}
+		if opcode >= 0x8 && (!fin || n > 125) { // control frames: never fragmented, at most 125 bytes
+			return 0, nil, errors.New("protocol error")
+		}
 		switch opcode {
 		case 0x8: // close
 			c.send(0x8, nil)
 			return 0, nil, io.EOF
 		case 0x9: // ping
-			if n > 125 {
-				return 0, nil, errors.New("protocol error")
-			}
 			c.send(0xA, payload)
 			continue
-		case 0xA: // pong
+		case 0xA: // pong: the peer is alive, even if it has nothing to send (muted, camera off)
+			deadline = time.Now().Add(timeout)
 			continue
 		case 0x1, 0x2:
 			if msgOp != 0 {
@@ -204,10 +218,15 @@ func (c *wsConn) send(op byte, data []byte) bool {
 		return false
 	default:
 	}
+	if c.queued.Add(int64(len(data))) > wsOutBytes && len(data) > 0 && op == 0x2 {
+		c.queued.Add(-int64(len(data)))
+		return false
+	}
 	select {
 	case c.out <- wsMsg{op, data}:
 		return true
 	default:
+		c.queued.Add(-int64(len(data)))
 		return false
 	}
 }
@@ -218,12 +237,14 @@ func (c *wsConn) sendJSON(v any) {
 }
 
 func (c *wsConn) writer() {
-	ping := time.NewTicker(20 * time.Second)
+	ping := time.NewTicker(c.ping)
 	defer ping.Stop()
 	for {
 		select {
 		case m := <-c.out:
-			if err := c.writeFrame(m.op, m.data); err != nil || m.op == 0x8 {
+			err := c.writeFrame(m.op, m.data)
+			c.queued.Add(-int64(len(m.data)))
+			if err != nil || m.op == 0x8 {
 				c.close()
 				return
 			}
@@ -300,7 +321,7 @@ type liveHello struct {
 }
 
 func (r *Relay) serveLive(w http.ResponseWriter, req *http.Request) {
-	c, err := upgrade(w, req)
+	c, err := upgrade(w, req, r.hub.ping)
 	if err != nil {
 		h := w.Header()
 		h.Set("Cache-Control", "no-store")
@@ -328,7 +349,10 @@ func (r *Relay) serveLive(w http.ResponseWriter, req *http.Request) {
 		}
 		rm, err = r.hub.open(hello.Room, key, c)
 	case "join":
-		rm, slot, err = r.hub.join(hello.Room, c)
+		if !distinct { // behind Tor everyone shares one address; joining still needs the room's secret id
+			key = ""
+		}
+		rm, slot, err = r.hub.join(hello.Room, key, c)
 	default:
 		err = errors.New("bad op")
 	}
@@ -336,7 +360,7 @@ func (r *Relay) serveLive(w http.ResponseWriter, req *http.Request) {
 		c.sendJSON(map[string]string{"op": "error", "msg": err.Error()})
 		return
 	}
-	defer r.hub.leave(rm, slot, c)
+	defer r.hub.leave(rm, slot, c, hello.Op == "join", key)
 	r.hub.mu.Lock()
 	other := rm.peers[1-slot]
 	r.hub.mu.Unlock()
@@ -362,6 +386,7 @@ func (r *Relay) serveLive(w http.ResponseWriter, req *http.Request) {
 					c.close()
 					return
 				}
+				alone.Reset(roomAlone) // check again: if the other person leaves, this room closes too
 			case <-life.C:
 				c.close()
 				return
@@ -376,15 +401,12 @@ func (r *Relay) serveLive(w http.ResponseWriter, req *http.Request) {
 	}()
 
 	for {
-		op, data, err := c.readMessage(wsIdle)
+		op, data, err := c.readMessage(r.hub.idle)
 		if err != nil {
 			return
 		}
-		if op != 0x2 { // only opaque binary frames are forwarded
-			continue
-		}
-		if !c.allowBytes(len(data)) {
-			continue // over the bandwidth limit: drop, like a congested network would
+		if !c.allowBytes(len(data)+2) || op != 0x2 { // every frame counts towards the bandwidth limit
+			continue // only opaque binary frames are forwarded; over the limit they're dropped, like a congested network would
 		}
 		r.hub.mu.Lock()
 		peer := rm.peers[1-slot]
@@ -411,24 +433,35 @@ func (h *liveHub) open(id, owner string, c *wsConn) (*room, error) {
 	return rm, nil
 }
 
-func (h *liveHub) join(id string, c *wsConn) (*room, int, error) {
+func (h *liveHub) join(id, who string, c *wsConn) (*room, int, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	rm := h.rooms[id]
 	if rm == nil {
 		return nil, 0, errors.New("no such call")
 	}
+	if who != "" && h.in[who] >= roomsPerClient {
+		return nil, 0, errors.New("busy")
+	}
 	for i := range rm.peers {
 		if rm.peers[i] == nil {
 			rm.peers[i] = c
+			if who != "" {
+				h.in[who]++
+			}
 			return rm, i, nil
 		}
 	}
 	return nil, 0, errors.New("call full")
 }
 
-func (h *liveHub) leave(rm *room, slot int, c *wsConn) {
+func (h *liveHub) leave(rm *room, slot int, c *wsConn, joined bool, who string) {
 	h.mu.Lock()
+	if joined && who != "" {
+		if h.in[who]--; h.in[who] <= 0 {
+			delete(h.in, who)
+		}
+	}
 	if rm.peers[slot] == c {
 		rm.peers[slot] = nil
 	}

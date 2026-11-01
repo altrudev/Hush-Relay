@@ -688,3 +688,43 @@ func TestInviteOnly(t *testing.T) {
 		t.Errorf("join on open relay = %d", rec.Code)
 	}
 }
+
+// Wrong join codes are limited; the right code always works, so guessing can't lock people out.
+func TestJoinOnlyFailuresCount(t *testing.T) {
+	r, h := newTestRelay(t, true) // behind Tor every visitor shares one rate-limit key
+	r.SetJoinCode("right-code")
+	for i := 0; i < 15; i++ {
+		do(h, call{url: "/relay.php?a=join", body: `{"s":"` + secret(500+i) + `","code":"wrong"}`})
+	}
+	rec, _ := do(h, call{url: "/relay.php?a=join", body: `{"s":"` + secret(600) + `","code":"wrong"}`})
+	if rec.Code != 429 {
+		t.Errorf("guessing was not limited: %d", rec.Code)
+	}
+	r2, h2 := newTestRelay(t, true)
+	r2.SetJoinCode("right-code")
+	for i := 0; i < 9; i++ {
+		do(h2, call{url: "/relay.php?a=join", body: `{"s":"` + secret(700+i) + `","code":"wrong"}`})
+	}
+	for i := 0; i < 20; i++ {
+		if rec, _ := do(h2, call{url: "/relay.php?a=join", body: `{"s":"` + secret(800+i) + `","code":"right-code"}`}); rec.Code != 200 {
+			t.Fatalf("member %d with the right code was refused: %d", i, rec.Code)
+		}
+	}
+}
+
+// Addresses in one IPv6 /64 count as one client.
+func TestIPv6GroupedBy64(t *testing.T) {
+	r, _ := newTestRelay(t, false)
+	key := func(ip string) string {
+		req := httptest.NewRequest("POST", "/relay.php", nil)
+		req.RemoteAddr = "[" + ip + "]:5000"
+		k, _ := r.clientKey(req)
+		return k
+	}
+	if key("2001:db8:1:2::1") != key("2001:db8:1:2:ffff::9") {
+		t.Error("one /64 should be one client")
+	}
+	if key("2001:db8:1:2::1") == key("2001:db8:1:3::1") {
+		t.Error("different /64s should be different clients")
+	}
+}

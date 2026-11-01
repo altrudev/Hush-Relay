@@ -290,6 +290,10 @@ func (r *Relay) clientKey(req *http.Request) (string, bool) {
 	}
 	salt := r.salt
 	r.mu.Unlock()
+	// One IPv6 subscriber usually holds a whole /64; treat it as one client.
+	if p := net.ParseIP(ip); p != nil && p.To4() == nil {
+		ip = p.Mask(net.CIDRMask(64, 128)).String() + "/64"
+	}
 	h := sha256.Sum256(append(salt[:], ip...))
 	return hex.EncodeToString(h[:12]), distinct
 }
@@ -309,6 +313,14 @@ func (r *Relay) allow(name, key string, window time.Duration, max int) bool {
 	c.exp = (slot + 1) * secs
 	r.counts[k] = c
 	return c.n <= max
+}
+
+// used reports how many events were counted in the current window, without counting one.
+func (r *Relay) used(name, key string, window time.Duration) int {
+	slot := r.now().Unix() / int64(window/time.Second)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.counts[name+"|"+key+"|"+strconv.FormatInt(slot, 10)].n
 }
 
 func (r *Relay) diskOK() bool {
@@ -462,14 +474,17 @@ func (r *Relay) join(w http.ResponseWriter, req *http.Request, box string, in ma
 		okJSON(w)
 		return
 	}
+	// Only wrong codes count, so guessing can't lock out people who have the code.
 	key, _ := r.clientKey(req)
-	if !r.allow("join", key, time.Hour, 10) || !r.allow("join-all", "all", time.Minute, 60) {
+	if r.used("join", key, time.Hour) >= 10 || r.used("join-all", "all", time.Minute) >= 60 {
 		fail(w, 429, "too many attempts")
 		return
 	}
 	code, _ := in["code"].(string)
 	got := sha256hex("hush-join|" + strings.TrimSpace(code))
 	if subtle.ConstantTimeCompare([]byte(got), []byte(r.joinHash)) != 1 {
+		r.allow("join", key, time.Hour, 10)
+		r.allow("join-all", "all", time.Minute, 60)
 		fail(w, 403, "wrong join code")
 		return
 	}
