@@ -2,7 +2,7 @@
 
 ## Status
 
-Hush Relay is **experimental and has not been audited by an independent security firm.** It went through two rounds of internal review: an adversarial code review with working exploit scripts, fixes, then a second review of those fixes (see the audit log below). That is not a substitute for expert review.
+Hush Relay is **experimental and has not been audited by an independent security firm.** Each release has had internal adversarial review with working exploit scripts, and every confirmed finding was fixed with a regression test before release (see the audit log below). That is not a substitute for review by outside cryptographers.
 
 Use it for everyday privacy, learning and experiments. If a bug could put you or the people you talk to at risk (activists, journalists, sources, people facing a hostile government), use [Signal](https://signal.org) or [SimpleX](https://simplex.chat).
 

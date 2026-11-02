@@ -13,7 +13,7 @@ Every option ends the same way: a stable `https://` (or `.onion`) address servin
 
 ## Go relay (recommended)
 
-Build it once (Go 1.22+), or download a release binary for your device:
+Download the binary for your device from the [releases page](https://github.com/altrudev/Hush-Relay/releases) (`hush-relay-<version>-linux-amd64`, `-linux-arm64`, `-linux-armv7`, `-windows-amd64.exe`, `-darwin-arm64`, …; check it against `SHA256SUMS`), or build it yourself (Go 1.22+):
 
 ```bash
 go build -trimpath -ldflags "-s -w" -o hush-relay ./cmd/hush-relay
@@ -102,7 +102,9 @@ sudo cat /var/lib/tor/hush/hostname      # your address: <56 characters>.onion
 
 People you invite can use the web app in any browser, or install the **Hush Relay Android app** (not in any app store):
 
-1. Download `hush-relay-<version>.apk` from the [releases page](https://github.com/altrudev/Hush-Relay/releases) and check it against the published SHA-256 and signing-certificate fingerprint.
+1. Download `hush-relay-<version>.apk` from the [releases page](https://github.com/altrudev/Hush-Relay/releases) and check it against the SHA-256 published with the release. Official builds are signed by Valentyn Rukhaylo (ALTRU.dev) with the certificate
+   `38:40:AF:64:FB:BB:D8:43:D6:A9:1F:7F:C0:F7:03:AF:AB:AD:32:4F:A0:8C:D4:24:A5:74:32:5E:00:CD:53:19`
+   (check with `apksigner verify --print-certs` or `keytool -printcert -jarfile`). Android only installs updates signed with the same certificate, so a tampered update can't replace the real app.
 2. Open it on the phone and allow installing from that source when Android asks.
 3. On the welcome screen, paste the invite link someone sent you (or share the link to the Hush Relay app from your messenger), then create your profile.
 
@@ -115,7 +117,9 @@ The app is the same code as the web app, bundled inside the APK so nothing is do
 ./android/build.sh --debug    # debug build: remote WebView inspector on, screenshots allowed
 ```
 
-It needs a JDK 17+, Android build-tools 34+ and one platform (35+). The first release build creates a signing key at `~/.hush-relay/release.jks` (or `HUSH_KEYSTORE`). **Back that key up**: Android only installs updates signed with the same key. `tests/android/run.sh` runs a two-person test (app plus a browser, with a video call) on an emulator.
+It needs a JDK 17+, Android build-tools 34+ and one platform (35+). The first release build creates a signing key at `~/.hush-relay/release.jks` (or `HUSH_KEYSTORE`; the password comes from `HUSH_KEYPASS` or a prompt). **Back that key up**: Android only installs updates signed with the same key.
+
+Your own build is signed with your own key, so it installs as a separate app from the official one and can't update it (or be updated by it). If you distribute a modified build, also give it its own name, icon and application id (`package` in `android/AndroidManifest.xml`); see the [brand guide](../assets/brand/README.md). `tests/android/run.sh` runs a two-person test (app plus a browser, with a video call) on an emulator.
 
 ## Android phone as the relay
 

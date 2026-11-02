@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0 (unreleased): calls, private relays and the Android app
+## 0.5.0 (2026-11-01): calls, private relays and the Android app
 - **Encrypted voice and video calls** through your own relay
   - WebCodecs (Opus 32 kbit/s, VP8 640×360 at 15 fps), audio worklets with a small jitter buffer, echo cancellation
   - A fresh 32-byte key per call, sent inside the ratchet; one AES-GCM key per direction, strictly increasing sequence numbers
@@ -17,6 +17,10 @@
 - **Redesign**: light, professional interface; one-tap invites (link, share sheet or QR) that add both people as contacts; a paste-invite field on the welcome screen
 - Fetching from a mailbox that hasn't joined an invite-only relay answers like an empty mailbox (only sending is refused)
 - Tests: browser end-to-end run now covers invite links, an invite-only relay behind a private path and a full video call
+- Security review of the new code: 13 findings fixed before release, including one high-severity issue in the Android app's link handling (see SECURITY.md, entries 26–38)
+- Official logo, app icons (PWA and Android), README banner, social preview and an install-and-use guide
+- Release builds of the Android app are signed by Valentyn Rukhaylo (ALTRU.dev); certificate SHA-256 `38:40:AF:64:FB:BB:D8:43:D6:A9:1F:7F:C0:F7:03:AF:AB:AD:32:4F:A0:8C:D4:24:A5:74:32:5E:00:CD:53:19`
+- Copyright and NOTICE: © 2026 Valentyn Rukhaylo (ALTRU.dev); brand guide for the name and logo
 
 ## 0.4.0 (2026-11-01): Go relay and Tor onion services
 - New Go relay: one self-contained binary with the app built in, Go standard library only

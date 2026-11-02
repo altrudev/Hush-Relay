@@ -1,6 +1,10 @@
+<p align="center"><img src="assets/brand/banner.png" alt="Hush Relay: private chat, voice and video on a relay you own" width="100%"></p>
+
 # Hush Relay
 
 **A small, self-hostable, end-to-end encrypted messenger with voice and video calls. No accounts, no phone numbers, no app store.**
+
+[**Download**](https://github.com/altrudev/Hush-Relay/releases/latest) · [Install & use](#install) · [Host a relay](docs/SELF-HOSTING.md) · [Security](SECURITY.md) · [Protocol](docs/PROTOCOL.md)
 
 Hush Relay is two pieces:
 
@@ -9,7 +13,7 @@ Hush Relay is two pieces:
 
 You run the relay yourself, on a spare Android phone, a $5 VPS, a Raspberry Pi or ordinary shared hosting. With a **private path and a join code** it looks like an ordinary website to everyone except the people you invite, and messages and calls travel as normal HTTPS traffic to your own server. A **Tor onion service** is optional, never required. You can also publish the app on IPFS.
 
-> ⚠️ **Status: experimental and not independently audited.** The design uses standard building blocks (a Signal-style Double Ratchet on WebCrypto), but it has only had two rounds of internal adversarial review ([audit log](SECURITY.md#audit-log)), not one by outside cryptographers. Use it for everyday privacy, learning and experiments. **If your safety depends on your messages** (activists, journalists, sources, people facing a hostile government), use [Signal](https://signal.org) or [SimpleX](https://simplex.chat) instead. See [SECURITY.md](SECURITY.md).
+> ⚠️ **Status: experimental and not independently audited.** The design uses standard building blocks (a Signal-style Double Ratchet on WebCrypto), but it has only had internal adversarial review ([audit log](SECURITY.md#audit-log)), not review by outside cryptographers. Use it for everyday privacy, learning and experiments. **If your safety depends on your messages** (activists, journalists, sources, people facing a hostile government), use [Signal](https://signal.org) or [SimpleX](https://simplex.chat) instead. See [SECURITY.md](SECURITY.md).
 
 ## Features
 
@@ -25,6 +29,20 @@ You run the relay yourself, on a spare Android phone, a $5 VPS, a Raspberry Pi o
 - **6 recovery words:** an encrypted backup kept on your relay, so you can get your account back on any device. The relay can't open it.
 - **Different relays talk to each other:** each person can use a different relay, in any country.
 - **No dependencies:** vanilla JS, WebCrypto and WebCodecs in the browser; a Go relay built only on the standard library (or one PHP file); a Java Android shell with no libraries. Three small vendored libraries handle QR codes and the wordlist.
+
+## Install
+
+<p align="center"><img src="assets/brand/install-and-use.png" alt="How to install and use Hush Relay" width="540"></p>
+
+**To chat** (everyone you invite), pick one:
+
+| | How | Notes |
+|---|---|---|
+| **Android app** | Download `hush-relay-<version>.apk` from [Releases](https://github.com/altrudev/Hush-Relay/releases/latest) and open it | No store. Check the SHA-256 from the release; official builds are signed by Valentyn Rukhaylo (ALTRU.dev), certificate `38:40:AF:64:…:00:CD:53:19` ([full fingerprint](docs/SELF-HOSTING.md#android-app)) |
+| **Web app (PWA)** | Open an invite link, then **Install** or **Add to Home Screen** | Android, Windows, Linux, ChromeOS, macOS; on iPhone use Safari's **Add to Home Screen** |
+| **Any browser** | Just open the invite link | Calls need a recent Chrome, Edge, Firefox or Safari |
+
+**To host** (one person per group): download the relay for your device from [Releases](https://github.com/altrudev/Hush-Relay/releases/latest) (Linux x86/ARM, Raspberry Pi, Windows, macOS), run `./hush-relay -new-path`, and put it behind HTTPS. The [self-hosting guide](docs/SELF-HOSTING.md) covers a VPS, a spare phone, shared hosting and Tor.
 
 ## Quick start (local, 1 minute)
 
@@ -63,6 +81,8 @@ The relay address gets baked into every invite, so **keep it stable.** A tunnel 
 
 On Android you can also install the [app](docs/SELF-HOSTING.md#android-app); paste an invite link on its welcome screen, or share the link to it.
 
+Links opened from outside the app (a web page, another app, a shared text) always ask before adding a contact, and can never start a profile move: move codes are only accepted from **Scan**.
+
 ## Repository layout
 
 ```
@@ -83,6 +103,7 @@ scripts/
   router.php    keeps the data folder private under php -S
   publish-ipfs.sh
 android/        Android app: Java WebView shell, no libraries; build.sh uses the plain SDK tools
+assets/brand/   logo, icons, banner, social preview, install guide (and render.py to rebuild them)
 tests/
   run.sh        full test suite against a throwaway relay
   android/      two-person device test on an emulator (app + browser, video call)
@@ -99,7 +120,7 @@ docs/
 - [Self-hosting and deployment](docs/SELF-HOSTING.md)
 - [Security limitations and vulnerability reporting](SECURITY.md)
 - [Contributing and local test procedure](CONTRIBUTING.md)
-- [Third-party attribution and licensing](LICENSES.md)
+- [Third-party attribution and licensing](LICENSES.md) · [NOTICE](NOTICE) · [Brand guide](assets/brand/README.md)
 - [Release history](CHANGELOG.md)
 
 ## Tests
@@ -130,6 +151,12 @@ Copyright © 2026 Valentyn Rukhaylo (ALTRU.dev).
 
 Original Hush Relay code and documentation are licensed under the **GNU Affero General Public License v3.0 or later** (SPDX: `AGPL-3.0-or-later`). The complete license is in [LICENSE](LICENSE). For hosted modified versions, AGPL section 13 may require providing the corresponding source to network users; see [LICENSES.md](LICENSES.md) for an overview. AGPL permits commercial use provided its terms are followed.
 
-Vendored components remain under their respective MIT or Apache-2.0 terms, detailed in [LICENSES.md](LICENSES.md) and the accompanying notice files. No trademark rights or separate proprietary license are granted by this repository.
+Vendored components remain under their respective MIT or Apache-2.0 terms, detailed in [LICENSES.md](LICENSES.md) and the accompanying notice files. The "Hush Relay" name and logo are not licensed as trademarks: forks that ship modified builds need their own name and icon ([brand guide](assets/brand/README.md)). No separate proprietary license is granted by this repository.
 
-Developed and maintained by [Val Rukhaylo / ALTRU.dev](https://altru.dev).
+## Author
+
+<img src="assets/brand/logo-mark-512.png" alt="" width="56" align="left">
+
+**Hush Relay** is created, designed and maintained by **Valentyn (Val) Rukhaylo**, [ALTRU.dev](https://altru.dev) — *Code for Humanity*.<br>
+Issues, ideas and security reports are welcome.
+<br clear="left">
