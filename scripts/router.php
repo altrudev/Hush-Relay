@@ -6,7 +6,7 @@
 //   - serves static files itself so every page carries anti-framing headers.
 // Not needed on Apache/cPanel (web/.htaccess does the same there).
 //
-// Copyright (C) 2026 Valentyn Rukhaylo (ALTRU.dev) and contributors
+// Copyright (C) 2026 Valentyn Rukhaylo (ALTRU.dev)
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 $web  = realpath(__DIR__ . '/../web');

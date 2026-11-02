@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hush Relay — Copyright (C) 2026 Valentyn Rukhaylo (ALTRU.dev) and contributors
+# Hush Relay — Copyright (C) 2026 Valentyn Rukhaylo (ALTRU.dev)
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Publish the Hush web app (not the relay) to IPFS with Kubo.
 # Usage: ./publish-ipfs.sh https://your-host/hush/relay.php
@@ -13,7 +13,7 @@ SRC="$(cd "$(dirname "$0")/../web" && pwd)"
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 
-cp "$SRC"/{index.html,app.js,call.js,worklet.js,sw.js,manifest.json,icon.svg} "$OUT"/ && cp -r "$SRC/vendor" "$OUT"/
+cp "$SRC"/{index.html,app.js,call.js,worklet.js,sw.js,manifest.json,icon.svg,icon-192.png,icon-512.png,icon-maskable.png,apple-touch-icon.png} "$OUT"/ && cp -r "$SRC/vendor" "$OUT"/
 printf 'window.HUSH_CONFIG = { relay: "%s" };\n' "$RELAY" > "$OUT/config.js"
 
 CID="$(ipfs add -r -Q --cid-version=1 "$OUT")"

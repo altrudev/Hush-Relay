@@ -126,7 +126,7 @@ Issues and pull requests are welcome, especially security review. Please report 
 
 ## License
 
-Copyright © 2026 Valentyn Rukhaylo (ALTRU.dev) and contributors.
+Copyright © 2026 Valentyn Rukhaylo (ALTRU.dev).
 
 Original Hush Relay code and documentation are licensed under the **GNU Affero General Public License v3.0 or later** (SPDX: `AGPL-3.0-or-later`). The complete license is in [LICENSE](LICENSE). For hosted modified versions, AGPL section 13 may require providing the corresponding source to network users; see [LICENSES.md](LICENSES.md) for an overview. AGPL permits commercial use provided its terms are followed.
 

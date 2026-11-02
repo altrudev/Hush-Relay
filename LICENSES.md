@@ -2,7 +2,7 @@
 
 ## Hush Relay original materials
 
-Copyright © 2026 Valentyn Rukhaylo (ALTRU.dev) and contributors.
+Copyright © 2026 Valentyn Rukhaylo (ALTRU.dev).
 
 Unless a file specifically identifies a separate license, original source code and documentation written for Hush Relay are licensed under the **GNU Affero General Public License, version 3 or any later version** (SPDX identifier: `AGPL-3.0-or-later`). The authoritative full license text appears in [LICENSE](LICENSE).
 

@@ -1,1 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" fill="#0e7a68"/><path d="M128 150h256a32 32 0 0 1 32 32v136a32 32 0 0 1-32 32H232l-80 60v-60h-24a32 32 0 0 1-32-32V182a32 32 0 0 1 32-32z" fill="#fff"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Hush Relay">
+  <rect width="512" height="512" rx="112" fill="#0e7a68"/>
+  <path d="M124 128h264a44 44 0 0 1 44 44v160a44 44 0 0 1-44 44H240l-88 66v-66h-28a44 44 0 0 1-44-44V172a44 44 0 0 1 44-44z" fill="#fff"/>
+  <circle cx="256" cy="228" r="38" fill="#0e7a68"/>
+  <path d="M238 252h36l12 68h-60z" fill="#0e7a68"/>
+</svg>

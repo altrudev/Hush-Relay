@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hush Relay — Copyright (C) 2026 Valentyn Rukhaylo (ALTRU.dev) and contributors
+# Hush Relay — Copyright (C) 2026 Valentyn Rukhaylo (ALTRU.dev)
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Build the Android app with the plain SDK tools: no Gradle, no libraries.
@@ -28,7 +28,7 @@ B="$HERE/build"; OUT="$HERE/out"
 rm -rf "$B"; mkdir -p "$B"/{res,gen,classes,assets/www/vendor} "$OUT"
 
 # The app: the same files the relay serves (no service worker needed inside the APK).
-cp "$ROOT"/web/{index.html,app.js,call.js,worklet.js,config.js,manifest.json,icon.svg} "$B/assets/www/"
+cp "$ROOT"/web/{index.html,app.js,call.js,worklet.js,config.js,manifest.json,icon.svg,icon-192.png} "$B/assets/www/"
 cp "$ROOT"/web/vendor/*.js "$ROOT"/web/vendor/*.txt "$B/assets/www/vendor/"
 cp "$ROOT"/LICENSE "$B/assets/www/LICENSE.txt"
 

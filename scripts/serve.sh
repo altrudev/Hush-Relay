@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hush Relay — Copyright (C) 2026 Valentyn Rukhaylo (ALTRU.dev) and contributors
+# Hush Relay — Copyright (C) 2026 Valentyn Rukhaylo (ALTRU.dev)
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Run the app and relay with PHP's built-in server.
 # Good for a spare Android phone (Termux), a Raspberry Pi, or a small VPS.

@@ -1,4 +1,4 @@
-# Hush Relay — Copyright (C) 2026 Valentyn Rukhaylo (ALTRU.dev) and contributors
+# Hush Relay — Copyright (C) 2026 Valentyn Rukhaylo (ALTRU.dev)
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Multi-browser end-to-end test, run via tests/run.sh --e2e:
 joining from an invite link (invite-only relay), adding a contact by QR picture,

@@ -1,4 +1,4 @@
-// Hush Relay — Copyright (C) 2026 Valentyn Rukhaylo (ALTRU.dev) and contributors
+// Hush Relay — Copyright (C) 2026 Valentyn Rukhaylo (ALTRU.dev)
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Device test, run by tests/android/run.sh: Alice uses the Android app, Bob uses a
 // second browser on the same emulator (Android's WebView shell), side by side.

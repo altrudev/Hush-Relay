@@ -1,5 +1,5 @@
 'use strict';
-// Hush Relay — Copyright (C) 2026 Valentyn Rukhaylo (ALTRU.dev) and contributors
+// Hush Relay — Copyright (C) 2026 Valentyn Rukhaylo (ALTRU.dev)
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /* Hush Relay v0.3 — end-to-end encrypted 1:1 messenger. Vanilla JS, WebCrypto only.
  *

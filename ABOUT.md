@@ -1,41 +1,45 @@
 # About Hush Relay
 
-**Hush Relay** is a small, open-source, self-hostable messaging project designed around browser-side encryption and a minimal PHP mailbox service. It can run as an installable progressive web app (PWA) and does not require accounts, phone numbers, an app store, a frontend build step, or a centrally operated service.
+**Hush Relay** is an open-source, end-to-end encrypted messenger with voice and video calls, built to run on a relay you own. There are no accounts, no phone numbers and no app store, and nobody in the middle can read what you send.
 
 ## Purpose
 
-Make it practical for people to host their own message relay and inspect the source of the client and server. The application handles identity keys, message encryption, contact management, verification, recovery, and device transfer in the browser. The PHP relay stores and retrieves encrypted envelopes; it is not intended to know message plaintext.
+Most messengers depend on one company's servers and its rules. Hush Relay makes it practical for anyone to run their own small, private relay (on a VPS, a spare phone or basic hosting), invite only the people they choose, and inspect every line of code involved. Encryption happens on each person's device; the relay only ever stores and forwards sealed envelopes.
 
 ## Components
 
-| Component | Implementation | Function |
+| Component | Implementation | What it does |
 |---|---|---|
-| Browser app | HTML, JavaScript, WebCrypto, service worker | Local keys, encryption, contacts, PWA interface |
-| Relay | PHP 7.4+ | Encrypted mailbox storage, long-poll delivery, expiration and quotas |
-| Self-hosting | Shell scripts, PHP CLI or web hosting | Local development, VPS, Android/Termux, shared hosting |
-| Protocol | Documented in `docs/PROTOCOL.md` | Ratchet, envelopes, recovery and linking |
-| Tests | Node.js and shell; optional Python Playwright | Deterministic crypto/relay checks, hardening and browser scenarios |
+| App | HTML, vanilla JavaScript, WebCrypto, WebCodecs, service worker | Keys, encryption, contacts, calls; installable as a web app (PWA) |
+| Android app | Java WebView shell, no libraries (`android/`) | The same app bundled in a small APK, with screenshot blocking and no cloud backup |
+| Go relay | One binary, Go standard library only (`cmd/hush-relay`) | Mailboxes, live delivery, call rooms over WebSocket, private path, invite-only mode; serves the app |
+| PHP relay | One file (`web/relay.php`) | Messages on ordinary shared hosting (no calls) |
+| Protocol | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | Double Ratchet, sealed envelopes, calls, recovery, device moves |
+| Tests | Go, Node.js, shell, Playwright, Android emulator | Crypto and relay checks, hardening, five-browser and on-device runs including video calls |
 
 ## What it does not promise
 
-**Experimental — no independent professional cryptographic audit.** Passing tests and prior internal reviews are not evidence of production-grade security. Hush Relay is not a substitute for mature, independently audited secure-messaging software where failure could expose people to harm.
+**Experimental, with no independent professional cryptographic audit.** It has been through several rounds of internal adversarial review (see the [audit log](SECURITY.md#audit-log)), but passing tests and internal reviews are not proof of production-grade security. Don't rely on it where a failure could put people in danger; use [Signal](https://signal.org) or [SimpleX](https://simplex.chat) for that.
 
-The relay can observe metadata such as IP addresses, mailbox destinations, time and approximate padded message size. The server delivering the web app can modify the JavaScript it provides, so independently pinning and reviewing deployed client code matters. See [SECURITY.md](SECURITY.md) for the threat model, outstanding risks and disclosure policy.
+The relay can see metadata: IP addresses, which mailbox receives mail, timing, approximate (padded) sizes, and that a call happened and for how long. Whoever serves the web app could change its code, so pinning and reviewing the deployed client matters; the Android app bundles a fixed copy. See [SECURITY.md](SECURITY.md).
 
-Other current limitations include one active device per account, no background push notifications, and device-local message history.
+Current limits: one active device per profile, no push notifications, one-to-one calls, and message history kept only on the device that received it.
 
 ## Getting started
 
-Run `./scripts/serve.sh` from a clone and open `http://localhost:8080` in two browsers. A public deployment needs a stable HTTPS endpoint. Follow the [README](README.md) and [self-hosting guide](docs/SELF-HOSTING.md) before exposing a relay.
+- **Use it:** open an invite link from someone who runs a relay, or install the Android app from [Releases](https://github.com/altrudev/Hush-Relay/releases).
+- **Host it:** download the relay for your device from Releases and follow the [self-hosting guide](docs/SELF-HOSTING.md).
+- **Try it locally:** `go build -o hush-relay ./cmd/hush-relay && ./hush-relay`, then open http://localhost:8080 in two browsers.
 
-## Governance and ownership
+## Ownership and governance
 
 - **Project:** Hush Relay
+- **Creator, designer and maintainer:** Valentyn (Val) Rukhaylo, [ALTRU.dev](https://altru.dev) ("Code for Humanity")
+- **Copyright:** © 2026 Valentyn Rukhaylo (ALTRU.dev); see [NOTICE](NOTICE)
 - **Repository:** https://github.com/altrudev/Hush-Relay
-- **Creator and maintainer:** Valentyn (Val) Rukhaylo / [ALTRU.dev](https://altru.dev)
-- **Initial public version:** 0.3.0 (2026-10-31)
-- **License:** GNU AGPL v3.0 or later for original project code; separate third-party notices for bundled libraries
-- **Contributions:** See [CONTRIBUTING.md](CONTRIBUTING.md)
-- **Security reports:** See [SECURITY.md](SECURITY.md); never report exploitable vulnerabilities publicly
+- **First public version:** 0.3.0 (2026-10-31) · **Current:** 0.5.0 (2026-11-01)
+- **License:** GNU AGPL v3.0 or later for original code and documentation; bundled libraries keep their own licenses ([LICENSES.md](LICENSES.md)); name and logo are not licensed as trademarks ([brand guide](assets/brand/README.md))
+- **Contributions:** [CONTRIBUTING.md](CONTRIBUTING.md)
+- **Security reports:** [SECURITY.md](SECURITY.md); please never post exploitable issues publicly
 
-No organization, foundation or third-party service is implied to sponsor, audit, or endorse this software.
+No organization, foundation or third-party service sponsors, audits or endorses this software.

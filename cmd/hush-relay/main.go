@@ -1,4 +1,4 @@
-// Hush Relay — Copyright (C) 2026 Valentyn Rukhaylo (ALTRU.dev) and contributors
+// Hush Relay — Copyright (C) 2026 Valentyn Rukhaylo (ALTRU.dev)
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Command hush-relay serves the Hush Relay app and its mailbox relay from a
@@ -37,7 +37,7 @@ import (
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
-var version = "dev"
+var version = "0.5.0"
 
 func main() {
 	home, _ := os.UserHomeDir()

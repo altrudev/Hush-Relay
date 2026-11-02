@@ -12,7 +12,7 @@
 // relay.config.php next to this one that defines HUSH_DATA. Keep it outside
 // the web root unless you are on Apache (which honours the .htaccess we write).
 //
-// Copyright (C) 2026 Valentyn Rukhaylo (ALTRU.dev) and contributors
+// Copyright (C) 2026 Valentyn Rukhaylo (ALTRU.dev)
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 header('Access-Control-Allow-Origin: *');
