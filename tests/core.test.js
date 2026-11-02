@@ -163,9 +163,11 @@ async function auditRegressions(){
   // (live-connection limits are tested with parallel curl in tests/run.sh)
 
   // A large contact list still fits the recovery slot and link transfer.
-  // Worst case: 500 contacts, every relay address at the 256-character maximum.
-  const many=[]; for(let i=0;i<500;i++){const k=await H.genKP(); const base='https://relay-'+i+'.example.org/'; many.push({pub:k.pub,box:H.hex(H.rand(16)),relay:base+'a'.repeat(256-base.length),name:'Contact number '+String(i).padEnd(25,'x')});}
+  // Worst case: as many contacts as a backup keeps, every relay address at the 256-character maximum.
+  const many=[]; for(let i=0;i<H.BACKUP_CONTACTS+50;i++){const k=await H.genKP(); const base='https://relay-'+i+'.example.org/'; many.push({pub:k.pub,box:H.hex(H.rand(16)),relay:base+'a'.repeat(256-base.length),name:'Contact number '+String(i).padEnd(25,'x')});}
+  many[many.length-1].verified=true; many[0].blocked=true;
   const big=await H.backupData(A,many); const rec=await H.recoveryKeys(H.genWords());
+  ok(big.contacts.length===H.BACKUP_CONTACTS && big.contacts[0].verified && !big.contacts.some(c=>c.blocked),'backup keeps verified contacts first when there are too many');
   const d=await H.sealRecovery(rec,big);
   ok((await post('rput',{l:rec.l,t:rec.t,d})).ok,'largest account: recovery backup stored ('+Math.round(d.length/1024)+' KB)');
   const eph=await H.genKP(); const sealed=await H.sealOuter({t:'link',data:big},eph.pub);

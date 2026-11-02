@@ -8,7 +8,7 @@ Unless a file specifically identifies a separate license, original source code a
 
 This is **free software**, including for commercial purposes, subject to the license conditions. You may use, study, copy and modify it under the AGPL terms. Source distribution and providing access to modified hosted software can trigger obligations under the license, including the network-use provisions of section 13. Read the complete license before distributing or operating a modified service. This summary is informational and is not a substitute for the license text or legal advice.
 
-The AGPL license does **not** give permission to use the "Hush Relay" or "ALTRU.dev" names or the Hush Relay logo as trademarks or endorsements (AGPL section 7(e)). Modified versions that you distribute or host need their own name and logo; see the [brand guide](assets/brand/README.md). No alternative proprietary license is granted through this repository.
+The AGPL license does **not** give permission to use the "Hush Relay" or "ALTRU.dev" names or the Hush Relay logo as trademarks or endorsements (AGPL section 7(e)). Modified versions that you distribute or host need their own name and logo; see the [brand guide](assets/brand/README.md). No alternative proprietary license is granted through this repository; for a commercial license (to build on Hush Relay without the AGPL's obligations), contact the maintainer through https://altru.dev.
 
 ## Brand assets
 
@@ -34,4 +34,4 @@ Hush Relay comes **WITHOUT ANY WARRANTY**, to the extent allowed by applicable l
 
 ## Copyright and provenance
 
-The copyright and creator credit above apply to the original Hush Relay code, documentation and brand assets, not to the works of third-party authors. Outside contributors keep the copyright in their own submissions, which are licensed to the project under AGPL-3.0-or-later (see [CONTRIBUTING.md](CONTRIBUTING.md)) and recorded in the git history.
+The copyright and creator credit above apply to the original Hush Relay code, documentation and brand assets, not to the works of third-party authors. Outside contributors keep the copyright in their own submissions and license them to the maintainer under the [Contributor License Agreement](CLA.md), which keeps them available under AGPL-3.0-or-later and also allows the maintainer to offer the project under additional terms, such as a commercial licence. Their authorship is recorded in the git history.

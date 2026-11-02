@@ -325,14 +325,15 @@ func (s *staticFiles) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if name == "" {
 		name = "index.html"
 	}
-	// Never serve dotfiles, data folders, server code or Go sources.
-	for _, seg := range strings.Split(name, "/") {
+	// Never serve dotfiles, data folders, server code or Go sources. Compared in lower
+	// case, because Windows and macOS file systems ignore case (Data/, relay.PHP).
+	for _, seg := range strings.Split(strings.ToLower(name), "/") {
 		if strings.HasPrefix(seg, ".") || seg == "data" {
 			notFound(w)
 			return
 		}
 	}
-	switch path.Ext(name) {
+	switch strings.ToLower(path.Ext(name)) {
 	case ".php", ".go", ".sh", ".md":
 		notFound(w)
 		return

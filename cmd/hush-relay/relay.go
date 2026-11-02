@@ -45,13 +45,15 @@ const (
 	maxBoxBytes = 8 << 20 // pending bytes per mailbox
 	ttl         = 14 * 24 * time.Hour
 	slotTTL     = 180 * 24 * time.Hour
-	maxWait     = 20        // seconds a live (long-poll) request may wait
-	minFree     = 256 << 20 // refuse new data below this much free disk
-	putsPerMin  = 120       // per client
-	slotsPerDay = 5         // new recovery slots per client
-	livePerKey  = 6         // concurrent long-polls per client
-	maxGet      = 100       // envelopes returned per get
-	maxAck      = 200       // ids accepted per ack
+	memberTTL   = 180 * 24 * time.Hour // invite-only memberships not renewed for this long expire
+	maxMembers  = 20000                // members an invite-only relay keeps at most
+	maxWait     = 20                   // seconds a live (long-poll) request may wait
+	minFree     = 256 << 20            // refuse new data below this much free disk
+	putsPerMin  = 120                  // per client
+	slotsPerDay = 5                    // new recovery slots per client
+	livePerKey  = 6                    // concurrent long-polls per client
+	maxGet      = 100                  // envelopes returned per get
+	maxAck      = 200                  // ids accepted per ack
 	// Onion mode: Tor hides client addresses, so limits are keyed per mailbox
 	// (and a few are global) instead of per client.
 	onionPutsPerBoxMin = 120
@@ -474,32 +476,48 @@ func (r *Relay) join(w http.ResponseWriter, req *http.Request, box string, in ma
 		okJSON(w)
 		return
 	}
-	// Only wrong codes count, so guessing can't lock out people who have the code.
-	key, _ := r.clientKey(req)
-	if r.used("join", key, time.Hour) >= 10 || r.used("join-all", "all", time.Minute) >= 60 {
-		fail(w, 429, "too many attempts")
-		return
-	}
+	key, distinct := r.clientKey(req)
 	code, _ := in["code"].(string)
 	got := sha256hex("hush-join|" + strings.TrimSpace(code))
 	if subtle.ConstantTimeCompare([]byte(got), []byte(r.joinHash)) != 1 {
+		// Wrong codes are limited. The limits never apply to the right code, so
+		// guessing can't lock out people who have it.
+		if r.used("join", key, time.Hour) >= 10 || r.used("join-all", "all", time.Minute) >= 60 {
+			fail(w, 429, "too many attempts")
+			return
+		}
 		r.allow("join", key, time.Hour, 10)
 		r.allow("join-all", "all", time.Minute, 60)
 		fail(w, 403, "wrong join code")
 		return
 	}
 	r.mu.Lock()
-	known := r.members[box]
+	known, count := r.members[box], len(r.members)
 	r.mu.Unlock()
-	if !known {
-		if err := os.WriteFile(filepath.Join(r.memberDir, box), nil, 0o600); err != nil {
-			fail(w, 500, "storage error")
-			return
-		}
-		r.mu.Lock()
-		r.members[box] = true
-		r.mu.Unlock()
+	if known { // already a member: just note that it's still in use
+		now := r.now()
+		_ = os.Chtimes(filepath.Join(r.memberDir, box), now, now)
+		okJSON(w)
+		return
 	}
+	// The code travels in invites and invites get forwarded, so new memberships are
+	// limited too: per client (not behind Tor, where everyone shares one address),
+	// relay-wide, in total, and never when the disk is nearly full.
+	if (distinct && !r.allow("join-new", key, time.Hour, 30)) || !r.allow("join-new-all", "all", time.Hour, 600) {
+		fail(w, 429, "too many new members, try later")
+		return
+	}
+	if count >= maxMembers || !r.diskOK() {
+		fail(w, 507, "relay full")
+		return
+	}
+	if err := os.WriteFile(filepath.Join(r.memberDir, box), nil, 0o600); err != nil {
+		fail(w, 500, "storage error")
+		return
+	}
+	r.mu.Lock()
+	r.members[box] = true
+	r.mu.Unlock()
 	okJSON(w)
 }
 
@@ -817,6 +835,22 @@ func (r *Relay) Sweep() {
 		unlock := r.lockBox(e.Name()) // not while a put is creating this folder
 		_ = os.Remove(dir)            // only succeeds when empty
 		unlock()
+	}
+	// Memberships nobody has renewed for memberTTL expire (the app renews its own on
+	// every start; temporary mailboxes from device moves simply lapse).
+	if r.inviteOnly() {
+		members, _ := os.ReadDir(r.memberDir)
+		for _, f := range members {
+			info, err := f.Info()
+			if err != nil || now.Sub(info.ModTime()) <= memberTTL {
+				continue
+			}
+			if os.Remove(filepath.Join(r.memberDir, f.Name())) == nil {
+				r.mu.Lock()
+				delete(r.members, f.Name())
+				r.mu.Unlock()
+			}
+		}
 	}
 	slots, _ := os.ReadDir(r.recover)
 	for _, f := range slots {

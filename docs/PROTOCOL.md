@@ -8,7 +8,7 @@ All cryptography uses the browser's WebCrypto API: ECDH P-256, HKDF-SHA-256, HMA
 - **Mailbox:** `secret` = 32 random bytes as hex, and `box` = first 32 hex characters of `SHA-256(secret)`. Anyone may deliver to `box`; reading and deleting require `secret`, which is only ever sent in a POST body.
 - **Contact id:** the first 32 hex characters of `SHA-256(rawPub)`. A different key is a different contact.
 - **Safety number:** `SHA-256(pubA ‖ pubB)` with the two keys sorted. The first 40 hex characters are shown in groups of 5.
-- **Invite:** `https://<app>/#i=` followed by `base64url(JSON {p: pub, b: box, r: relayURL, n: name, k: inviteToken, j?: joinCode})`. It travels in the URL fragment, so it never reaches a server. `k` is 12 random bytes: someone who adds you from your invite sends `{t: "hello", k}`, and a matching token lets your app accept them as a contact instead of a request. `j` is your relay's join code when it is invite-only, so the person you invite can sign up there. Inside the Android app, `<app>` is the web copy of the app your relay serves (the relay URL without its last path segment).
+- **Invite:** `https://<app>/#i=` followed by `base64url(JSON {p: pub, b: box, r: relayURL, n: name, k: inviteToken, j?: joinCode})`. It travels in the URL fragment, so it never reaches a server. `k` is 12 random bytes: someone who adds you from your invite sends `{t: "hello", k}`, and a matching token lets your app accept them as a contact instead of a request, for the first 25 people per token (`me.inviteTok` is replaced when you make a new link). `j` is your relay's join code when it is invite-only, so the person you invite can sign up there. Inside the Android app, `<app>` is the web copy of the app your relay serves (the relay URL without its last path segment).
 
 ## Envelope (what the relay stores)
 
@@ -41,7 +41,7 @@ Message bodies are JSON: `{t: "msg", id, txt, ts}`, `{t: "reset", id, ts}`, `{t:
 
 | Action | Request | Result |
 |---|---|---|
-| `?a=put&box=<32hex>` | raw envelope bytes (93 bytes to 256 KiB) | `{ok}`; at most 500 pending per box |
+| `?a=put&box=<32hex>` | raw envelope bytes (93 bytes to 512 KiB) | `{ok}`; at most 500 pending per box |
 | `?a=get&wait=<0..20>` | `{"s": secret}` | `[{id, d: base64}]`, waiting up to `wait` seconds for mail |
 | `?a=ack` | `{"s": secret, "ids": [...]}` | deletes delivered mail |
 | `?a=rput` | `{"l": 32hex, "t": 64hex, "d": b64url}` | stores a recovery slot; an existing slot needs the same `t` |
@@ -85,8 +85,8 @@ type   = 1 audio (Opus, 48 kHz mono, 32 kbit/s, 20 ms) · 2 video (VP8, 640×360
 
 1. The new device creates an ephemeral key pair `E` and a temporary mailbox `(s, b = box(s))`. It shows `https://<app>/#link=` followed by `base64url({r, e: E.pub, s})` as a QR code (`b` is derived from `s`). On an invite-only relay the old device uses its join code to admit the temporary mailboxes before delivering. It also shows the 12-digit code `SHA-256(E.pub)[0..16 hex] mod 10^12`.
 2. The old device scans the QR, shows the same code, and waits for the user to approve.
-3. The old device seals `{t: "link", data: accountBundle, ack: {r, b: ackBox}}` to `E.pub` with the envelope's outer layer, delivers it, and waits up to 2 minutes for any message in `ackBox`.
-4. The new device opens the bundle, imports it, sends the acknowledgement, and sends `reset` to every contact.
+3. The old device seals `{t: "link", data: accountBundle, ack: {r, b: ackBox, n: nonce}}` (`nonce` = 32 random bytes, hex) to `E.pub` with the envelope's outer layer, delivers it, and waits up to 2 minutes for a message in `ackBox` that starts with `nonce`.
+4. The new device opens the bundle, imports it, sends the acknowledgement (`nonce` followed by 64 random bytes; the relay never sees `nonce` in the clear, so it can't fake this), and sends `reset` to every contact.
 5. The old device erases itself only after the acknowledgement arrives.
 
 ## Encrypted backup file

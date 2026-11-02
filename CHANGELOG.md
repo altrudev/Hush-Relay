@@ -21,6 +21,9 @@
 - Official logo, app icons (PWA and Android), README banner, social preview and an install-and-use guide
 - Release builds of the Android app are signed by Valentyn Rukhaylo (ALTRU.dev); certificate SHA-256 `38:40:AF:64:FB:BB:D8:43:D6:A9:1F:7F:C0:F7:03:AF:AB:AD:32:4F:A0:8C:D4:24:A5:74:32:5E:00:CD:53:19`
 - Copyright and NOTICE: © 2026 Valentyn Rukhaylo (ALTRU.dev); brand guide for the name and logo
+- Full audit of the whole repository: 3 medium and 5 low-severity issues fixed before release (SECURITY.md, entries 39–47): join-code lockout, membership limits and expiry, invite-link auto-accept cap with "Make a new link", contact deletion, authenticated device-move acknowledgement, Android device-transfer exclusion
+- Contributor License Agreement (CLA.md) and a pull request template; contributors keep their copyright
+- Relay binaries for 10 platforms with SHA256SUMS (`scripts/build-release.sh`)
 
 ## 0.4.0 (2026-11-01): Go relay and Tor onion services
 - New Go relay: one self-contained binary with the app built in, Go standard library only

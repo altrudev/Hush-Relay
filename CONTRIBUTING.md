@@ -18,7 +18,11 @@ Do **not** post exploit details or sensitive vulnerabilities in public issues or
 
 ## Licensing submissions
 
-By submitting a contribution, you agree to make your contribution available under the existing project license, **AGPL-3.0-or-later**, and confirm that you are authorized to submit it. This does not assign your copyright to the project owner. Third-party contributions must be compatible with the project license and must retain required notices.
+Before your first pull request can be merged, you need to agree to the [Contributor License Agreement](CLA.md) (CLA). The pull request template contains the one sentence to keep.
+
+In short: **you keep the copyright** in your work and it stays available to everyone under AGPL-3.0-or-later, and you give the maintainer, Valentyn Rukhaylo (ALTRU.dev), a licence to also offer the project under other terms (for example a commercial licence), which is how the project can fund itself. Contributing for an employer? Ask for the organization version first.
+
+Third-party code you include must be compatible with the project license and must retain its required notices.
 
 New source files start with the project header:
 

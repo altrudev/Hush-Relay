@@ -39,11 +39,15 @@ Please report privately through GitHub's **Report a vulnerability** button (the 
 5. **Shared origins.** Browser storage is per origin. Don't host the app on an origin that also runs other people's code (for example, a shared cPanel domain with other apps).
 6. **Device linking** uses a 12-digit comparison code (about 40 bits) inside a 10-minute window. Compare the code; never approve a request you didn't start.
 7. **Invites are not signed.** If someone intercepts your invite, they can swap the mailbox in it, though not the key. Verify safety numbers once.
-8. **Calls go through the caller's relay.** It can see that a call happened, when, for how long and roughly how much data it used. It can't see or hear the call, or learn which contact is calling (only that someone with the room's secret joined). There is no peer-to-peer mode, so neither side learns the other's IP address.
+8. **Calls go through the caller's relay.** It can see that a call happened, when, for how long and roughly how much data it used. It can't see or hear the call. It does learn the caller's mailbox (the caller proves membership when opening the room), and when the callee uses the same relay it can usually link the two by timing. There is no peer-to-peer mode, so neither side learns the other's IP address.
 9. **The private path is not a secret from the relay host or your network provider's view of your server.** HTTPS hides the path and content, but not the server's address or name. The join code, not the path, is what keeps strangers out.
 10. **Android app updates are your responsibility.** There's no store to update it: check the APK's SHA-256 and signing-certificate fingerprint against the release page, and keep Android System WebView updated, since the app runs on it.
 11. **One device per account.** Recovering or linking while another copy is still active leads to lost messages. Erase the old copy.
-12. **No independent cryptographic review yet.**
+12. **Some sizes aren't hidden.** Messages are padded up to 32 KiB, but larger payloads (a profile being moved) and recovery slots travel at their real size, which hints at how many contacts you have.
+13. **Recovery words share one salt.** The 6 words carry 66 bits and PBKDF2 runs 600,000 rounds, but the salt is the same for everyone, so a relay holding many recovery slots can test each guess against all of them at once. Fixing this needs a new recovery format.
+14. **Sender details are protected by the outer layer only.** The sender's mailbox, relay and name inside an envelope are encrypted to you but not bound into the ratchet's authentication. This is safe while the outer layer stays confidential; a future protocol version should bind them.
+15. **Invite links can be forwarded.** Anyone holding your link can add you and, on an invite-only relay, join it. The first 25 people are added as contacts; later ones arrive as requests. Make a new link from the invite screen if one spreads too far.
+16. **No independent cryptographic review yet.**
 
 ## Deployment checklist
 
@@ -127,4 +131,20 @@ A separate review of the 0.5.0 additions (call rooms, invite-only mode and priva
 | 38 | Info | Fragmented or oversized control frames were accepted; text frames weren't counted against the bandwidth limit | Rejected; every frame counts |
 
 Checked and found sound: WebSocket frame-length limits and masking, room isolation and 256-bit room ids, private-path normalisation (case, `//`, dot segments, encoded slashes), member file naming and constant-time code checks, per-direction call keys with no nonce reuse, the Android asset server, permission and intent handling.
+
+### 2026-11-01: full audit of the whole repository (0.5.0)
+
+A separate auditor reviewed the entire repository: the crypto core, both relays, the app, calls, the Android shell, scripts and docs. No critical or high-severity issues; the crypto core and the XSS surface held up. Fixed before release, with regression tests where they can be automated:
+
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| 39 | Medium | The fix for #33 still checked the limits before the code, so enough wrong guesses blocked the right code too (relay-wide behind Tor) | The right code is always accepted; only wrong codes are checked against the limits |
+| 40 | Medium | Anyone with the join code could register unlimited mailboxes, filling memory and disk on a small relay | New memberships limited per client and relay-wide, capped at 20,000, refused when the disk is nearly full; memberships not renewed for 180 days expire (the app renews its own on every start) |
+| 41 | Medium | A forwarded invite link made every holder an accepted contact, so one person could fill the contact list (5,000 cap) and push real contacts out of the recovery backup | An invite link auto-accepts 25 people, then the rest arrive as requests; "Make a new link" on the invite screen; blocked contacts don't count towards the cap; any contact can be deleted; the backup keeps verified and recent contacts first (up to 900) and warns when some don't fit |
+| 42 | Low | The PHP relay's "data folder exposed" check looked at the parent folder and didn't resolve symlinks | Resolves the data folder itself and refuses it inside the app folder or document root |
+| 43 | Low | The device-move acknowledgement wasn't authenticated: a malicious relay could make the old device erase itself without the new one having the profile | The acknowledgement must carry a secret nonce that only travelled inside the sealed bundle |
+| 44 | Low | Move codes were accepted from the "paste an invite" box | Refused there; moves start only from Scan |
+| 45 | Low | Android's phone-to-phone transfer could copy the keys to a new phone | `dataExtractionRules` exclude everything from cloud backup and device transfer |
+| 46 | Low | SECURITY.md said the relay can't tell which contact is calling | Corrected (known limit 8) |
+| 47 | Info | During a move, your join code could be sent to a relay named in the scanned code; Go static checks were case-sensitive; envelope size documented wrongly; unpadded large payloads, a shared recovery salt and outer-layer-only sender fields were undocumented | Join code goes only to your own relay; checks compare in lower case; PROTOCOL corrected; known limits 12–15 added |
 

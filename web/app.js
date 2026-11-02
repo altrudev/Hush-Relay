@@ -207,6 +207,7 @@ async function decryptFrom(me, c, inner) {
 }
 
 // ---------- account bundles (identity + contact list, never ratchet state) ----------
+const BACKUP_CONTACTS = 900; // contacts that fit in a recovery slot or move bundle, even with long relay addresses
 async function backupData(me, contacts) {
   return {
     v: 3,
@@ -214,7 +215,10 @@ async function backupData(me, contacts) {
           name: me.name, relay: me.relay, rec: me.rec || null, join: me.join || null, inviteTok: me.inviteTok || null },
     at: Date.now(),
     // Unanswered message requests are left out, so strangers cannot bloat the backup.
-    contacts: contacts.filter(c => !c.request).slice(0, 500)
+    // If there are more contacts than fit, verified and recently active ones come first.
+    contacts: contacts.filter(c => !c.request)
+      .sort((a, b) => (!!a.blocked - !!b.blocked) || (!!b.verified - !!a.verified) || ((b.ts || 0) - (a.ts || 0)))
+      .slice(0, BACKUP_CONTACTS)
       .map(c => ({ pub: c.pub, box: c.box, relay: c.relay, name: c.name, verified: !!c.verified, blocked: !!c.blocked }))
   };
 }
@@ -287,7 +291,7 @@ async function linkCode(pub) {
 
 if (typeof module !== 'undefined') module.exports = {
   newIdentity, encryptFor, decryptFrom, sealOuter, openOuter, genKP, safetyNumber, contactId,
-  backupData, restoreData, exportBackup, importBackup, genWords, normWords, recoveryKeys, sealRecovery, openRecovery,
+  BACKUP_CONTACTS, backupData, restoreData, exportBackup, importBackup, genWords, normWords, recoveryKeys, sealRecovery, openRecovery,
   linkCode, isRelay, b64e, b64d, hex, rand, sha
 };
 
@@ -365,6 +369,7 @@ if (typeof document !== 'undefined') (() => {
       : d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ', ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   }
   const fmtDur = s => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+  const INVITE_USES = 25; // people one invite link adds as contacts before the rest arrive as requests
   const isHex = (s, n) => typeof s === 'string' && s.length === n && /^[0-9a-f]+$/.test(s);
 
   // What a relay supports. Older (PHP) relays don't know "info": treat them as open, no calls.
@@ -545,7 +550,7 @@ if (typeof document !== 'undefined') (() => {
     const grid = $('#safetyGrid'); grid.textContent = '';
     for (const g of (await safetyNumber(me.pub, c.pub)).split(' ')) { const s = document.createElement('span'); s.textContent = g; grid.append(s); }
     $('#verifyBtn').hidden = c.verified;
-    $('#deleteReqBtn').hidden = !c.request;
+    $('#deleteReqBtn').textContent = c.request ? 'Delete request' : 'Delete contact';
   }
   $('#verifyBtn').onclick = async () => {
     const c = contacts.get(current); if (!c) return;
@@ -553,7 +558,8 @@ if (typeof document !== 'undefined') (() => {
   };
   $('#deleteReqBtn').onclick = async () => {
     const c = contacts.get(current); if (!c) return;
-    contacts.delete(c.id); await dropContact(c.id); goHome();
+    if (!c.request && !confirm('Delete ' + c.name + ' and your chat history with them? They can still message you later, as a new request.')) return;
+    contacts.delete(c.id); await dropContact(c.id); if (!c.request) scheduleSync(); goHome();
   };
   $('#blockBtn').onclick = async () => {
     const c = contacts.get(current); if (!c) return;
@@ -626,7 +632,7 @@ if (typeof document !== 'undefined') (() => {
         // Strangers can't crowd out real contacts: at most 200 open requests, oldest dropped first.
         const reqs = [...contacts.values()].filter(x => x.request).sort((a, b) => a.ts - b.ts);
         for (const old of reqs.slice(0, Math.max(0, reqs.length - 199))) { contacts.delete(old.id); await dropContact(old.id); }
-        if ([...contacts.values()].filter(x => !x.request).length >= 5000) return;
+        if ([...contacts.values()].filter(x => !x.request && !x.blocked).length >= 5000) return;
       }
       contacts.set(id, c);
       const dup = typeof msg.id === 'string' && seen.has(id + ':' + msg.id);
@@ -637,7 +643,11 @@ if (typeof document !== 'undefined') (() => {
         if (current !== id) c.unread = (c.unread || 0) + 1;
       } else if (msg.t === 'hello' && !dup) {
         // Someone joined through your invite: they're expected, not a stranger.
-        if (isNew && me.inviteTok && msg.k === me.inviteTok) c.request = false;
+        // An invite link can be forwarded, so it only auto-accepts a limited number of
+        // people; after that (or after you make a new link) they arrive as requests.
+        if (isNew && me.inviteTok && msg.k === me.inviteTok && (me.inviteUses || 0) < INVITE_USES) {
+          c.request = false; me.inviteUses = (me.inviteUses || 0) + 1; await kvSet('me', me);
+        }
         c.ts = Date.now(); c.last = c.request ? 'Wants to message you' : 'Joined with your invite';
         await putMessage({ contact: id, dir: 'sys', txt: c.name + (c.request ? ' wants to message you.' : ' joined using your invite.'), ts: Date.now() });
         if (current !== id) c.unread = (c.unread || 0) + 1;
@@ -799,6 +809,7 @@ if (typeof document !== 'undefined') (() => {
   async function syncRecovery() {
     if (!me || !me.rec) return false;
     try {
+      if ([...contacts.values()].filter(c => !c.request).length > BACKUP_CONTACTS) toast('You have more than ' + BACKUP_CONTACTS + ' contacts; only the verified and most recent ones fit in your recovery backup', 6000);
       const d = await sealRecovery(me.rec, await backupData(me, [...contacts.values()]));
       const r = await fetch(me.relay + '?a=rput', { method: 'POST', headers: TP, body: JSON.stringify({ l: me.rec.l, t: me.rec.t, d, s: me.secret }) });
       if (!r.ok) throw new Error('relay answered ' + r.status);
@@ -891,7 +902,9 @@ if (typeof document !== 'undefined') (() => {
           try { await adopt(bundle.data); }
           catch (e) { alert('Could not sign in: ' + e.message); show('vSetup'); return; }
           if (bundle.ack && isRelay(bundle.ack.r) && isBox(bundle.ack.b))
-            fetch(bundle.ack.r + '?a=put&box=' + bundle.ack.b, { method: 'POST', headers: TP, body: rand(96) }).catch(() => {});
+            // The acknowledgement carries the secret nonce from the sealed bundle, so a relay can't fake it.
+            fetch(bundle.ack.r + '?a=put&box=' + bundle.ack.b, { method: 'POST', headers: TP,
+              body: isHex(bundle.ack.n, 64) ? new Uint8Array([...bundle.ack.n.match(/../g).map(x => parseInt(x, 16)), ...rand(64)]) : rand(96) }).catch(() => {});
           return;
         }
       } catch { await sleep(3000); }
@@ -922,9 +935,11 @@ if (typeof document !== 'undefined') (() => {
       if (me.join) { // invite-only relays: admit the two temporary mailboxes used for the move
         const join = (relay, s) => fetch(relay + '?a=join', { method: 'POST', headers: TP, body: JSON.stringify({ s, code: me.join }) }).catch(() => {});
         await join(me.relay, ackSecret);
-        if (isHex(o.s, 64)) await join(o.r, o.s);
+        // Your join code only ever goes to your own relay, never to one named in a scanned code.
+        if (isHex(o.s, 64) && new URL(o.r).host === new URL(me.relay).host) await join(o.r, o.s);
       }
-      const bundle = { t: 'link', data: await backupData(me, [...contacts.values()]), ack: { r: me.relay, b: ackBox } };
+      const ackNonce = hex(rand(32));
+      const bundle = { t: 'link', data: await backupData(me, [...contacts.values()]), ack: { r: me.relay, b: ackBox, n: ackNonce } };
       const r = await fetch(o.r + '?a=put&box=' + o.b, { method: 'POST', headers: TP, body: await sealOuter(bundle, o.e) });
       if (!r.ok) throw new Error('the relay refused it (' + r.status + ')');
       toast('Waiting for the new device to confirm…', 0);
@@ -934,7 +949,10 @@ if (typeof document !== 'undefined') (() => {
         const items = g.ok ? await g.json() : [];
         if (items.length) {
           await fetch(me.relay + '?a=ack', { method: 'POST', headers: TP, body: JSON.stringify({ s: ackSecret, ids: items.map(i => i.id) }) }).catch(() => {});
-          return wipe('Your profile moved to the new device. This device is now signed out.');
+          // Erase this device only for the real acknowledgement (it holds the nonce that
+          // travelled sealed to the new device), never just because something arrived.
+          const real = items.some(i => { try { return hex(fromStd(i.d).slice(0, 32)) === ackNonce; } catch { return false; } });
+          if (real) return wipe('Your profile moved to the new device. This device is now signed out.');
         }
         if (!g.ok) await sleep(2000);
       }
@@ -980,12 +998,23 @@ if (typeof document !== 'undefined') (() => {
   }
   $('#inviteBtn').onclick = openInvite;
   $('#settingsInviteBtn').onclick = openInvite;
+  $('#newInviteBtn').onclick = async e => {
+    e.preventDefault();
+    if (!confirm('Make a new invite link? People who use your old link will arrive as requests instead of contacts.')) return;
+    me.inviteTok = b64e(rand(12)); me.inviteUses = 0; await kvSet('me', me); scheduleSync();
+    openInvite(); toast('New invite link ready');
+  };
   $('#copyBtn').onclick = async () => { try { await copyText($('#inviteLink').value); toast('Invite link copied'); } catch { $('#inviteLink').select(); } };
   $('#shareBtn').onclick = () => AND ? AND.share('Here\'s my private chat invite: ' + $('#inviteLink').value) : navigator.share
     ? navigator.share({ title: 'Chat with me on Hush Relay', text: 'Here\'s my private chat invite:', url: $('#inviteLink').value }).catch(() => {})
     : $('#copyBtn').click();
   $('#addLinkBtn').onclick = () => { show('vAdd', 'Add a contact'); $('#addIn').value = ''; };
-  $('#addBtn').onclick = () => { const v = $('#addIn').value.trim(); if (v) handleCode(v); };
+  $('#addBtn').onclick = () => {
+    const v = $('#addIn').value.trim(); if (!v) return;
+    // A pasted move code could come from anyone ("paste this to add me"): moves only start from Scan.
+    if (/#link=/.test(v)) return alert('That is a request to move a profile, not an invite. To move your profile, use Scan on the device that has it.');
+    handleCode(v);
+  };
   $('#addScanBtn').onclick = openScanner;
   $('#scanBtn').onclick = openScanner;
   $('#settingsScanBtn').onclick = openScanner;
@@ -1142,6 +1171,8 @@ if (typeof document !== 'undefined') (() => {
   function start() {
     goHome(); handleHash();
     if (started) return; started = true;
+    // Invite-only relays expire memberships nobody renews; renew ours quietly on every start.
+    if (me.join) fetch(me.relay + '?a=join', { method: 'POST', headers: TP, body: JSON.stringify({ s: me.secret, code: me.join }) }).catch(() => {});
     liveLoop();
     relayInfo(me.relay).then(async info => { // keep call support up to date
       if (info.ok && info.calls !== !!me.calls) { me.calls = info.calls; await kvSet('me', me); }

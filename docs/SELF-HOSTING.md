@@ -48,6 +48,8 @@ Run your relay so that it looks like an ordinary website to everyone except the 
 ./hush-relay -path /k7q4mxp2ab/ -join-code 3f9c1e7a5b2d8c40
 ```
 
+The path and code above are only examples: run `-new-path` yourself and use what it prints.
+
 - **The front page** (`https://relay.example.com/`) shows a plain "nothing here" page; any other address gives a normal 404. The app lives at `https://relay.example.com/k7q4mxp2ab/`. Open that, create your profile, and share invites from there.
 - **The join code** makes the relay invite-only. Your invites carry it, so people you invite never type it; strangers who find the address can't create a mailbox or store anything. Changing the code later doesn't remove people who already joined.
 - **Calls** go through the same HTTPS connection (`…/k7q4mxp2ab/live`), so to your network provider a call looks like any other secure connection to your server, much like a mainstream chat app talking to its servers. No peer-to-peer traffic, no extra ports.

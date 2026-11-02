@@ -702,7 +702,7 @@ func TestJoinOnlyFailuresCount(t *testing.T) {
 	}
 	r2, h2 := newTestRelay(t, true)
 	r2.SetJoinCode("right-code")
-	for i := 0; i < 9; i++ {
+	for i := 0; i < 70; i++ { // well past both the per-client and the relay-wide limit
 		do(h2, call{url: "/relay.php?a=join", body: `{"s":"` + secret(700+i) + `","code":"wrong"}`})
 	}
 	for i := 0; i < 20; i++ {
@@ -726,5 +726,49 @@ func TestIPv6GroupedBy64(t *testing.T) {
 	}
 	if key("2001:db8:1:2::1") == key("2001:db8:1:3::1") {
 		t.Error("different /64s should be different clients")
+	}
+}
+
+// New memberships are limited and capped; renewals always work; stale ones expire.
+func TestMemberLimitsAndExpiry(t *testing.T) {
+	r, h := newTestRelay(t, false)
+	r.SetJoinCode("code")
+	join := func(n int, ip string) int {
+		rec, _ := do(h, call{url: "/relay.php?a=join", body: `{"s":"` + secret(n) + `","code":"code"}`, remote: ip + ":4000"})
+		return rec.Code
+	}
+	for i := 0; i < 30; i++ {
+		if c := join(1000+i, "203.0.113.5"); c != 200 {
+			t.Fatalf("join %d: %d", i, c)
+		}
+	}
+	if c := join(2000, "203.0.113.5"); c != 429 {
+		t.Errorf("31st new member from one client: %d, want 429", c)
+	}
+	if c := join(1000, "203.0.113.5"); c != 200 {
+		t.Errorf("renewing an existing membership must always work: %d", c)
+	}
+	if c := join(2001, "198.51.100.9"); c != 200 {
+		t.Errorf("another client: %d", c)
+	}
+	box := sha256hex(secret(1001))[:32]
+	old := time.Now().Add(-memberTTL - time.Hour)
+	_ = os.Chtimes(filepath.Join(r.memberDir, box), old, old)
+	r.Sweep()
+	if r.isMember(box) {
+		t.Error("a membership not renewed for memberTTL should expire")
+	}
+	if !r.isMember(sha256hex(secret(1000))[:32]) {
+		t.Error("a renewed membership must stay")
+	}
+}
+
+// Server files stay hidden whatever their case (Windows and macOS ignore it).
+func TestStaticBlockIgnoresCase(t *testing.T) {
+	_, h := newTestRelay(t, false)
+	for _, p := range []string{"/relay.config.PHP", "/Data/x", "/README.MD", "/.Git/config"} {
+		if rec, _ := do(h, call{method: "GET", url: p}); rec.Code != 404 {
+			t.Errorf("%s served with %d", p, rec.Code)
+		}
 	}
 }

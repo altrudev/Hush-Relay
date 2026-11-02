@@ -132,10 +132,13 @@ function sweep() {
 }
 
 // --- refuse to run with the data folder exposed -----------------------------
+// Resolve the data folder itself (following symlinks when it exists) and refuse if it
+// is, or is inside, the app folder or the document root. Nothing is created first.
 $software = $_SERVER['SERVER_SOFTWARE'] ?? '';
-$dataParent = realpath(dirname(DATA)) ?: dirname(DATA);
+$dataReal = rtrim(realpath(DATA) ?: (realpath(dirname(DATA)) ?: dirname(DATA)) . '/' . basename(DATA), '/') . '/';
+$appReal = rtrim(realpath(__DIR__), '/') . '/';
 $docRoot = realpath((string)($_SERVER['DOCUMENT_ROOT'] ?? '')) ?: null;
-$insideWebRoot = strpos($dataParent, realpath(__DIR__)) === 0 || ($docRoot && $docRoot !== '/' && strpos($dataParent . '/', rtrim($docRoot, '/') . '/') === 0);
+$insideWebRoot = strpos($dataReal, $appReal) === 0 || ($docRoot && $docRoot !== '/' && strpos($dataReal, rtrim($docRoot, '/') . '/') === 0);
 if ($insideWebRoot && !preg_match('/Apache|LiteSpeed/i', $software) && !getenv('HUSH_ROUTER')) {
     fail(500, 'data folder is inside the web root on a server that ignores .htaccess; set HUSH_DATA (see docs/SELF-HOSTING.md)');
 }
